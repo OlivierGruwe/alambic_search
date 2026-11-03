@@ -1,0 +1,68 @@
+{% from "_macros.html" import acl_chips %}
+<section class="section" style="margin: 0" aria-labelledby="detail-title">
+  <h2 id="detail-title" class="fname" style="font-size: 1.07rem; font-weight: 600">{{ d.path|basename }}</h2>
+  <span class="sub path">{{ d.path|dirname or "(racine)" }}</span>
+  <p style="margin: 10px 0 16px"><span class="status {{ DOC_STATUS[d.status][1] }}">{{ DOC_STATUS[d.status][0] }}</span></p>
+  {% if notice %}<p class="notice notice-{{ notice[0] }}" role="status" style="margin-bottom: 16px">{{ notice[1] }}</p>{% endif %}
+  {% if d.error %}<div class="error-box" style="margin-bottom: 16px">{{ d.error }}</div>{% endif %}
+  {% if d.status == 'ocr_required' %}<p class="hint" style="margin-bottom: 16px">Le fichier ne contient pas de texte (document scanné).{% if light %} Alambic Light n'a pas pu en lire le texte.{% else %} Il deviendra interrogeable une fois Alambic Light configuré (section <code>alambic_light</code> de sources.yaml).{% endif %}</p>{% endif %}
+  {% set m = d.meta %}
+  {% if m %}
+  <h2 style="margin-top: 4px">Alambic Light</h2>
+  <dl class="source-meta">
+    <dt>Type</dt><dd>{% if m.doc_type %}{{ m.label }} <span class="sub">({{ m.doc_type }}{% if m.confidence is not none %}, confiance {{ (m.confidence * 100)|round|int }} %{% endif %})</span>{% else %}Non reconnu{% endif %}</dd>
+    <dt>Données</dt><dd>{% if m.validated %}<span class="status ok">Validées</span>{% elif m.to_check %}<span class="status warn">{{ m.to_check|length }} à vérifier</span>
+      {% if m.light_status == "EXPIRE" %}<span class="sub">Résultat expiré dans Alambic Light : une validation éventuelle ne peut plus être reprise.</span>
+      {% elif m.light_status == "EFFACE" %}<span class="sub">Validé dans Alambic Light, mais ses données ont été effacées (export acquitté) avant d'être reprises.</span>{% endif %}{% elif m.fields %}<span class="status ok">Contrôlées</span>{% else %}—{% endif %}</dd>
+    <dt>Résultat</dt><dd><span class="path">{{ m.light_uuid or "—" }}</span></dd>
+  </dl>
+  {% set lv = light_validation(request, m) %}
+  {% if lv %}
+  <div class="light-validate">
+    {% if lv.allowed is false %}
+    <p class="hint">La validation se fait dans Alambic Light, avec l'un des rôles {{ lv.roles }}.</p>
+    {% elif lv.url %}
+    <a class="btn" href="{{ lv.url }}" target="_blank" rel="noopener"
+       title="Ouvre le document dans l'écran de validation d'Alambic Light (nouvel onglet). Alambic Light vérifie vos droits.">Valider dans Alambic Light</a>
+    {% endif %}
+    <form hx-post="/admin/documents/relire" hx-target="#detail" hx-swap="innerHTML">
+      <input type="hidden" name="source" value="{{ d.source }}"><input type="hidden" name="doc_id" value="{{ d.doc_id }}">
+      <button class="btn secondary" type="submit"
+              title="Reprend tout de suite les données validées, sans attendre la prochaine synchronisation.">Relire le résultat</button>
+    </form>
+    {% if lv.allowed is none %}<p class="hint">Alambic Light vous demandera de vous connecter et vérifiera votre droit de validation.</p>{% endif %}
+  </div>
+  {% endif %}
+  {% if m.fields %}
+  <div class="table-wrap" style="margin-bottom: 16px"><table>
+    <thead><tr><th>Champ</th><th>Valeur</th></tr></thead>
+    <tbody>
+    {% for name, value in m.fields.items() %}
+      <tr><td class="nowrap">{{ name|field_name }}</td>
+          <td>{{ value|field_value|truncate(300) }}{% if name in m.to_check %} <span class="status warn">à vérifier</span>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if m.to_check %}<p class="hint" style="margin-bottom: 16px">Les valeurs « à vérifier » sont signalées comme telles dans les réponses. Une fois validées par un gestionnaire dans Alambic Light, elles sont reprises à la synchronisation suivante, ou tout de suite avec « Relire le résultat ».</p>{% endif %}
+  {% endif %}
+  {% endif %}
+  <dl class="source-meta">
+    <dt>Source</dt><dd>{{ d.source }}</dd>
+    <dt>Taille</dt><dd>{{ d.size|size }}</dd>
+    <dt>Indexé</dt><dd>{{ d.indexed_at|when }}</dd>
+    <dt>Identifiant</dt><dd><span class="path">{{ d.doc_id }}</span></dd>
+    <dt>Accès</dt>
+    <dd>{{ acl_chips(d.acl) }}</dd>
+  </dl>
+  {% if chunks %}
+  <h2 style="margin-top: 8px">Extraits indexés <span class="sub">({{ d.chunks }})</span></h2>
+  {% for c in chunks %}
+  {% if c.chunk_no == FICHE_CHUNK_NO %}
+  <div class="chunk"><span class="sub">Fiche (type et données, interrogeable)</span><p style="white-space: pre-line">{{ c.text|truncate(600) }}</p></div>
+  {% else %}
+  <div class="chunk"><span class="sub">Extrait {{ c.chunk_no + 1 }} · page {{ c.page }}</span><p>{{ c.text|truncate(420) }}</p></div>
+  {% endif %}
+  {% endfor %}
+  {% if d.chunks > chunks|length %}<p class="hint">{{ d.chunks - chunks|length }} extraits supplémentaires non affichés.</p>{% endif %}
+  {% endif %}
+</section>

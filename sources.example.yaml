@@ -1,0 +1,103 @@
+# Sources à indexer et annuaire. Copier en sources.yaml et adapter.
+# Les mots de passe ne figurent JAMAIS ici : seulement le nom de la variable d'environnement (…_env).
+
+# --- Annuaire : résout un utilisateur en SID et groupes (groupes imbriqués compris) ---
+# Les utilisateurs se connectent sur / avec leur compte Windows ; leurs groupes viennent d'ici.
+# Sans cette section, pas de connexion utilisateur (seuls la console et son bac à sable marchent).
+#
+# identity:
+#   type: ldap
+#   url: ldaps://dc01.corp.local
+#   base_dn: DC=corp,DC=local
+#   bind_user: CORP\svc-alambic
+#   bind_password_env: LDAP_PASSWORD
+#   cache_ttl: 300                # secondes
+#
+# Pour une démonstration sans annuaire (page de connexion : même mot de passe pour tous,
+# lu dans la variable DEMO_PASSWORD de .env) :
+# identity:
+#   type: static
+#   password_env: DEMO_PASSWORD
+#   users:
+#     alice: [compta]
+#     bob: [rh]
+#     olivier: [direction, compta, rh, tous]
+
+# --- Connexion unique (Keycloak, ou autre fournisseur OIDC) ---
+# Remplace la connexion par mot de passe : une seule connexion pour Alambic Search, Alambic Light
+# et le portail. Keycloak se branche sur l'AD du client (fédération LDAP) ou sur Entra ID.
+# oidc:
+#   issuer: ${OIDC_ISSUER}                 # ex. https://auth.client.fr/realms/alambic
+#   client_id: alambic-search
+#   client_secret_env: OIDC_CLIENT_SECRET
+#   url_publique: ${PUBLIC_URL}            # adresse d'Alambic Search vue par les navigateurs
+#   url_interne: ${OIDC_INTERNAL_URL}      # Keycloak vu par le serveur (Docker : http://keycloak:8180/realms/alambic)
+#   groupes: annuaire                      # annuaire : relus dans l'AD (SID compris) ;
+#                                          # jeton : ceux du jeton Keycloak (pas d'accès à l'AD)
+#
+# --- Portail : applications proposées après connexion, selon les rôles Keycloak ---
+# (« Rechercher dans les documents » est toujours proposé.)
+# portail:
+#   - nom: Alambic Light — validation
+#     url: http://localhost:8001/validation
+#     description: Contrôler et corriger les données extraites des documents
+#     role: alambic-light:validation       # client:rôle Keycloak ; absent : tout le monde
+#   - nom: Alambic Light — types de documents
+#     url: http://localhost:8001/ui/types
+#     role: alambic-light:admin
+
+# --- Alambic Light : OCR des scans, type du document et données extraites ---
+# Sans cette section, seul le texte des fichiers est indexé (les scans restent « OCR requis »).
+# Le fichier est lu dans la source, envoyé à Alambic Light, puis oublié : Alambic Search n'en garde
+# pas de copie. Les données « à vérifier » sont signalées comme telles ; une fois validées dans
+# Alambic Light, elles sont reprises à la synchronisation suivante.
+#
+# alambic_light:
+#   url: ${ALAMBIC_LIGHT_URL}
+#   api_key_env: ALAMBIC_LIGHT_API_KEY      # compte avec le droit « typage » (et « lecture » pour les libellés)
+#   # ou un jeton OAuth2 :
+#   # client_id: alambic-search
+#   # client_secret_env: ALAMBIC_LIGHT_SECRET
+#   envoyer: tous        # tous : PDF et images (type et données pour tous) ; scans : seulement sans texte
+#   ia: true             # false : Tesseract, mots-clés et règles seulement (aucun appel IA payant)
+#   concurrence: 2       # documents analysés en parallèle
+#   delai_max: 300       # secondes d'attente maximale par document
+#   # Bouton « Valider dans Alambic Light » de la console (fiche d'un document à vérifier) :
+#   # adresse vue par le NAVIGATEUR ({uuid} = résultat). Par défaut : <url>/validation?document={uuid}.
+#   # "" : pas de bouton.
+#   # lien_validation: https://light.corp.local/validation?document={uuid}
+#   # roles_validation: [alambic-light:validation, alambic-light:admin]   # rôles Keycloak qui voient le bouton
+
+# --- Sources ---
+# Importées en base au PREMIER démarrage, puis gérées dans la console (/admin/sources) :
+# ajout, modification, suppression, export. Ensuite, ce fichier n'est plus lu pour les sources
+# (une source ajoutée ici plus tard est signalée dans la console, avec un bouton « Importer »).
+sources:
+  # Partage Windows lu en SMB : les droits sont les ACL NTFS de chaque fichier.
+  # Compte de service : lecture seule (« Lire » + « Lire les autorisations »).
+  # - name: commun
+  #   type: smb
+  #   server: fichiers.corp.local
+  #   share: Commun
+  #   path: ""                      # sous-dossier éventuel
+  #   username: CORP\svc-alambic
+  #   password_env: SMB_PASSWORD
+  #   encrypt: true                 # chiffrement SMB3 si le serveur le permet
+  #   analyse_light: false          # texte seul : ni type ni données, OCR des scans seulement
+  #   acl_refresh_hours: 24         # relecture périodique des droits (filet de sécurité)
+
+  # Dossier local ou partage monté : les droits sont des règles par dossier.
+  # La règle du dossier le plus spécifique s'applique ; sans règle, personne ne voit le fichier.
+  # ${DOCUMENTS_DIR} vient de .env (ex. D:/documents) avec make run, et vaut /data/partage dans Docker :
+  # le même fichier sert dans les deux modes.
+  - name: partage-commun
+    type: filesystem
+    root: ${DOCUMENTS_DIR}
+    # Synchro automatique : nouveaux fichiers, droits, et données validées dans Alambic Light.
+    # Absent : synchro manuelle seulement (console, make sync).
+    synchro_minutes: 60
+    acl:
+      "": [direction]
+      Public: [tous]
+      Compta: [compta, direction]
+      RH: [rh]

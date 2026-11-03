@@ -1,0 +1,48 @@
+{# Bandeau commun Alambic (charte alambic-ui) : même structure dans Alambic Light. #}
+{% set b = bandeau(request) %}
+<header class="al-bar">
+  <a class="al-brand" href="{{ b.home }}" aria-label="Alambic {{ b.product }}, accueil">
+    <svg viewBox="70 -6 300 236" aria-hidden="true"><defs><mask id="al-cut" maskUnits="userSpaceOnUse" x="60" y="-10" width="320" height="250"><rect x="60" y="-10" width="320" height="250" fill="#fff"/><line x1="170" y1="151" x2="100" y2="167.5" stroke="#000" stroke-width="2.8"/></mask></defs><g mask="url(#al-cut)" fill="currentColor" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon stroke-width="5" points="78.9,223 196,2 245,2 362.1,223 316.1,223 220.5,47 124.9,223"/><line stroke-width="12" x1="193" y1="153.5" x2="239" y2="153.5"/><line stroke-width="12" x1="193" y1="183.5" x2="256" y2="183.5"/><line stroke-width="12" x1="193" y1="213.5" x2="239" y2="213.5"/></g></svg>
+    <span class="al-wordmark"><b>alambic</b> <span>{{ b.product }}</span></span>
+  </a>
+  {% if b.groups %}
+  <details class="al-menu">
+    <summary class="al-apps-btn" aria-label="Applications Alambic">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>
+      Applications
+    </summary>
+    <div class="al-pop">
+      {% if b.portal %}<a href="/"><strong>Portail</strong><small>Toutes vos applications Alambic</small></a><hr>{% endif %}
+      {% for g in b.groups %}
+      <p class="al-pop-group">{{ g.titre }}</p>
+      {% for a in g.apps %}
+      <a href="{{ a.url }}" {% if a.current %}aria-current="page"{% endif %}{% if a.externe %} target="_blank" rel="noopener"{% endif %}>
+        <strong>{{ a.nom }}</strong>{% if a.description %}<small>{{ a.description }}</small>{% endif %}
+      </a>
+      {% endfor %}
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+  <div class="al-bar-fill"></div>
+  {% if b.client %}<span class="al-chip-ink" title="Client">{{ b.client }}</span>{% endif %}
+  {% if b.help_url %}<a class="al-icon-btn" href="{{ b.help_url }}" target="_blank" rel="noopener" aria-label="Aide">?</a>{% endif %}
+  {% if b.user %}
+  <details class="al-menu">
+    <summary class="al-user-btn" aria-label="Compte de {{ b.user.name }}">
+      <span class="al-avatar" aria-hidden="true">{{ b.user.initials }}</span>
+      <span>{{ b.user.name }}</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </summary>
+    <div class="al-pop al-right">
+      <p class="al-pop-group">{{ b.user.login }}</p>
+      {% if b.user.basic %}
+      <p class="hint" style="padding: 4px 12px 8px">Connecté par le mot de passe de la console. Fermez le navigateur pour vous déconnecter.</p>
+      {% else %}
+      <form method="post" action="/deconnexion"><button type="submit"><strong>Se déconnecter</strong><small>Ferme la session dans toutes les applications</small></button></form>
+      {% endif %}
+    </div>
+  </details>
+  {% endif %}
+</header>
+<script src="/admin/static/alambic-ui/alambic.js" defer></script>

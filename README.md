@@ -1,0 +1,363 @@
+# Alambic Search — POC
+
+Couche d'interrogation par-dessus un partage réseau existant : indexation du contenu,
+recherche hybride (plein texte + vecteurs), réponses avec citations au niveau de la page,
+droits d'accès appliqués **avant** que le moindre extrait n'atteigne le LLM.
+
+Les fichiers restent dans le partage. L'index stocke le texte découpé, les vecteurs,
+les métadonnées, les droits et un pointeur vers l'original.
+
+## Démarrage rapide
+
+Prérequis : Docker, [uv](https://docs.astral.sh/uv/) et `make`. `make` seul liste toutes les commandes.
+
+```bash
+cp sources.example.yaml sources.yaml          # adapter les règles de droits
+export ADMIN_PASSWORD='un-mot-de-passe-solide'
+make up                                       # base, Ollama, API
+make pull-models                              # bge-m3 et mistral-small
+
+curl -X POST -u admin:$ADMIN_PASSWORD localhost:8002/sources/partage-commun/sync
+curl -X POST localhost:8002/ask -H 'X-User-Groups: compta' \
+     -H 'Content-Type: application/json' \
+     -d '{"question": "Quelle est la pénalité de retard du contrat de maintenance ?"}'
+```
+
+`demo-data/` contient trois fichiers d'exemple ; pour un vrai test, monter le partage
+SMB/NFS en lecture seule à la place (voir `docker-compose.yml`).
+
+## Console d'administration
+
+Ouvrir `http://localhost:8002/admin` (utilisateur `admin`, mot de passe `ADMIN_PASSWORD`).
+Sans mot de passe défini, la console est désactivée.
+
+- **Tableau de bord** : état de l'index (indexés, à passer en OCR, en erreur), questions des 14 derniers jours
+  et part restée sans source citée, documents à traiter, dernière synchro par source.
+- **Sources** : emplacement, formats, droits par dossier, synchronisation en un clic (en arrière-plan,
+  suivi en direct) et historique des passages avec leurs erreurs.
+- **Documents** : recherche par chemin, filtres par source et statut, détail d'un document (droits,
+  extraits indexés, motif d'erreur).
+- **Bac à sable** : poser une question à la place d'un utilisateur (ses groupes), voir la réponse,
+  les extraits transmis au modèle et ceux qui ont été cités. Ces questions n'entrent pas dans les statistiques.
+
+Aucune ressource externe : polices, htmx et logo sont servis par l'application (réseau fermé possible).
+Le journal des questions contient leur texte : prévoir une purge (`purge_questions`) selon la politique RGPD.
+
+## Droits Windows et annuaire
+
+Avec une source `type: smb`, Alambic Search lit le partage directement en SMB (sans montage) :
+
+- **Identité** : le FileId du serveur, stable malgré renommages et déplacements.
+- **Droits** : la DACL NTFS de chaque fichier, traduite en SID autorisés et refusés en lecture.
+  Un refus explicite l'emporte toujours (lecture plus stricte que Windows : au pire un document
+  lisible reste caché, jamais l'inverse). Les ACE « héritage seul » sont ignorées.
+- **Coût** : les droits sont gardés en cache, relus quand le fichier change et au moins toutes
+  les `acl_refresh_hours` (24 h par défaut). Samba, par exemple, ne signale pas un changement
+  de droits seul : le bouton **Relire tous les droits** de la console force une relecture.
+- **Compte de service** : lecture seule, avec « Lire les autorisations ». Un fichier qu'il ne
+  peut pas lire apparaît en erreur dans la console.
+
+Avec une section `identity: type: ldap`, l'utilisateur (en-tête `X-User`, champ « Utilisateur »
+du bac à sable) est résolu dans l'Active Directory : son SID, tous ses groupes via `tokenGroups`
+(imbriqués et groupe principal compris), plus « Tout le monde » et « Utilisateurs authentifiés ».
+Les noms de groupes sont aussi ajoutés, ce qui permet d'écrire les règles des sources
+`filesystem` avec des noms AD. La console affiche les noms plutôt que les SID.
+
+Tests contre un vrai serveur (Linux, root) : `make samba` puis `make test-smb`.
+
+## Fichiers bureautiques : conversion en PDF
+
+Avec `CONVERT_URL` (service Gotenberg/LibreOffice, lancé par `make db` et `make up`), les
+fichiers Word, Excel, PowerPoint et OpenDocument (.docx .doc .odt .rtf .xlsx .xls .ods .pptx .ppt
+.odp) sont convertis en PDF avant l'extraction :
+
+- **vraies pages** : un .docx n'est plus vu comme une seule page, les citations sont exactes ;
+- **Alambic Light** reçoit le PDF : les documents bureautiques sont typés eux aussi ;
+- **lien de citation** : `/documents/…?pdf=true#page=N` ouvre le PDF converti à la volée,
+  à la page citée (droits revérifiés) ; sans `pdf=true`, le fichier d'origine.
+
+Le PDF n'est jamais conservé. Échec de conversion = document en erreur, retenté au passage
+suivant. Sans `CONVERT_URL` : .docx lu sans pagination, autres formats bureautiques ignorés.
+
+## Réponses : formulées par le LLM ou extraits seuls
+
+La formulation par le LLM est optionnelle.
+
+- **Sans LLM** (`LLM_MODEL=` vide dans `.env`) : aucune génération, pas de modèle à héberger.
+  Une question renvoie les extraits les plus pertinents des documents accessibles, classés et
+  cités (fichier, page, lien). `make pull-models` ne télécharge alors que le modèle d'embeddings.
+- **Par question** : `"formuler": false` dans `/ask`, case « Formuler une réponse avec le LLM »
+  du bac à sable, `make ask ... EXTRAITS=1` en ligne de commande.
+
+Les droits s'appliquent de la même façon dans les deux cas. `/ask` renvoie `formulee`
+(true/false) et, sans formulation, `extraits` (texte, fichier, page, type).
+
+**Identifiant dans la question** (n° de permis, de facture, de contrat : au moins 5 caractères
+avec un chiffre et une lettre ou un tiret, ex. `G6006-270173-05`) : seuls les documents qui le
+contiennent tel quel, dans leur texte ou leurs données extraites, sont retenus ; la recherche par
+ressemblance n'en ajoute pas d'autres. Si aucun document ne le contient, la réponse le dit et
+revient à la ressemblance. `/ask` renvoie `identifiants` et `identifiants_introuvables`.
+
+**Vignettes** : chaque résultat montre l'aperçu de la page trouvée (clic : ouvre le document à
+cette page). Rendues à la volée depuis la source (PDF, images ; bureautique si la conversion PDF
+est configurée), gardées en mémoire seulement, jamais écrites sur disque. Droits : ceux de l'index,
+comme pour l'extrait affiché ; un document non autorisé répond 404. Route : `GET
+/vignettes/{source}/{doc_id}?page=N&l=160|320|480` (WebP).
+
+**Un résultat par document** : case « Un résultat par document » (recherche et bac à sable),
+`"par_document": true` dans `/ask`, `par_document=true` sur `/search`. Chaque document n'apparaît
+qu'une fois, même trouvé à plusieurs endroits, avec le lien vers sa meilleure page et la liste
+des pages trouvées (chacune avec son lien). `k` compte alors des documents ; le LLM reçoit
+jusqu'à 3 passages par document et ses citations [n] désignent des documents. `/ask` renvoie
+`documents` : `n`, `path`, `type`, `url`, `extrait`, `pages` [{`page`, `url`}].
+
+## Mesurer la qualité : jeu de questions de référence
+
+Avant de régler quoi que ce soit (reclassement, découpage, modèle), on mesure. Le jeu de
+questions dit, pour chaque question, quels documents doivent être retrouvés ; la mesure passe
+par le même chemin que les utilisateurs, droits compris. Format : `eval/jeu.exemple.yaml`.
+
+```bash
+make eval-generer N=40          # questions candidates tirées de l'index → eval/candidates.yaml (à relire !)
+cp eval/jeu.exemple.yaml eval/jeu.yaml   # puis y mettre les vraies questions
+make eval                       # recherche seule (rapide)
+make eval REPONSES=1            # + réponses rédigées : citations justes, mots attendus, « je ne sais pas »
+make eval-reference             # la mesure devient la référence ; les suivantes affichent écarts et régressions
+```
+
+Indicateurs : document attendu retrouvé dans les k premiers, en premier, rang moyen (MRR),
+bonne page ; avec `REPONSES=1`, citations justes, mots attendus, refus quand aucun document ne
+répond. **Fuites** : un document déclaré interdit retrouvé ou cité, à corriger en priorité.
+Code retour 1 en cas de fuite ou de régression (utilisable en intégration continue).
+
+## Alambic Light : OCR, type et données
+
+Avec une section `alambic_light` dans `sources.yaml` (voir `sources.example.yaml`), chaque PDF et
+chaque image (PNG, JPEG, TIFF, WEBP, alors indexés aussi) est envoyé à Alambic Light pendant la
+synchronisation (`envoyer: tous`), ou seulement ceux sans texte (`envoyer: scans`).
+
+- **Scans** : le texte OCR rendu par Alambic Light est découpé et indexé comme un autre texte.
+- **Type et données** : stockés avec le document, filtrables (`types` dans `/search` et `/ask`,
+  filtre « Type » de la console et du bac à sable) et résumés dans une **fiche** indexée,
+  premier extrait du document : « Fiche Alambic : Facture / Fournisseur : … / Montant TTC : … ».
+- **Données douteuses** : marquées « (à vérifier) » dans la fiche ; le LLM a pour consigne de le
+  dire s'il s'en sert. Une fois validées par un gestionnaire dans Alambic Light, elles sont
+  reprises à la synchronisation suivante (fiche « données validées »).
+- **Fichier** : jamais conservé par Alambic Search. Il est envoyé avec un pointeur
+  (`source` = `alambic-search:<source>`, `identifiant` = chemin).
+- **Pannes** : Alambic Light injoignable → document en erreur, retenté au passage suivant ;
+  fichier refusé (format, taille) → texte local seul ; fichier jugé illisible → pas de nouvel
+  essai tant qu'il ne change pas.
+- Les droits ne changent pas : ceux de la source s'appliquent à la fiche comme au texte.
+- **Reprise des validations** : à chaque synchro, les documents qui avaient des données « à
+  vérifier » sont relus dans Alambic Light (`GET /v1/documents/{uuid}`). Validés, leurs valeurs
+  validées remplacent la fiche. Résultat expiré, ou validé mais données effacées (export
+  acquitté) : les valeurs connues restent, marquées « à vérifier », et ne sont plus relues.
+  Avec `synchro_minutes` sur la source, cette reprise se fait toute seule.
+
+Le texte OCR est lu dans la réponse du typage ou, à défaut, sur `GET /v1/documents/{uuid}/texte`.
+Si Alambic Light n'expose aucun des deux, un scan n'est interrogeable que par sa fiche (signalé
+dans la console).
+
+## Connexion des utilisateurs
+
+Page `/` : connexion avec le compte Windows (identifiant `alice`, `CORP\alice` ou
+`alice@corp.local`), puis question ou liste. Le mot de passe est vérifié par l'AD (connexion LDAP
+au nom de l'utilisateur), jamais stocké. Les groupes viennent de l'annuaire pour le compte
+connecté, relus toutes les 5 minutes : personne ne choisit ses droits.
+
+- Session : cookie signé (`SESSION_SECRET`), HttpOnly, SameSite=Lax, 8 h ; `COOKIE_SECURE=true`
+  derrière HTTPS.
+- 5 échecs en 15 min pour un identifiant ou une adresse : connexion bloquée 15 min (en dessous
+  du seuil de verrouillage de l'AD, pour ne pas verrouiller les comptes Windows).
+- API (`/ask`, `/search`, `/recherche`, `/documents`) : même session. Les en-têtes `X-User` /
+  `X-User-Groups` ne sont acceptés qu'avec `TRUST_IDENTITY_HEADERS=true`, derrière un proxy
+  de confiance.
+- Démonstration sans AD : `identity: type: static` avec `password_env: DEMO_PASSWORD`.
+- Plus tard : connexion Windows automatique (Kerberos) et Entra ID / Keycloak (OIDC).
+
+## Connexion unique (Keycloak) et portail
+
+Avec une section `oidc` dans `sources.yaml`, la connexion passe par Keycloak (ou un autre
+fournisseur OIDC) : une seule connexion pour Alambic Search, Alambic Light et le portail ;
+« Se déconnecter » ferme la session partout. Voir **docs/connexion-unique.md**.
+
+- `make sso` : Keycloak de démonstration (royaume prêt, comptes olivier / alice / bob, mot de passe `demo`).
+- Groupes : relus dans l'AD (`groupes: annuaire`, défaut, SID compris) ou pris dans le jeton
+  (`groupes: jeton`, installation sans accès à l'AD).
+- Portail (`/`) : tuiles des applications selon les rôles Keycloak (section `portail`).
+- Rôle `alambic-search:admin` : console `/admin` sans mot de passe.
+- API : jetons Keycloak acceptés (`Authorization: Bearer …`) s'ils sont destinés à `alambic-search`.
+- Sources FTP / FTPS et S3 (Amazon ou compatible) : voir la section des sources.
+
+## Recherche par critères : « toutes les factures de M. GRUWE »
+
+La recherche par ressemblance classe des extraits et en garde quelques-uns : elle ne convient pas
+pour lister. La recherche par critères filtre en SQL sur les données extraites par Alambic Light :
+
+- **documents** : type demandé ET un champ contient la valeur (mot entier, sans casse ni accents :
+  « GRUWE » trouve « M. Olivier Gruwé », pas « GRUWEL »). Liste complète (500 max, signalé si
+  tronquée) ; une valeur « à vérifier » est signalée, pas écartée ;
+- **mentions** (à part) : documents du type, ou non typés, dont seul le texte contient la valeur.
+
+Droits appliqués comme pour les questions. Accès :
+
+- API : `GET /recherche?type=FACTURE&valeur=GRUWE[&champ=client]`
+- Console : bac à sable, onglet « Liste par critères »
+- Question en langage courant (avec un LLM) : « toutes les factures de M. GRUWE », « combien de
+  factures pour Gruwe ? » sont traduites en critères. Le LLM ne choisit pas les documents : type et
+  champ doivent exister, la valeur doit figurer dans la question, sinon recherche ordinaire.
+  `/ask` renvoie alors `liste` (même format que `/recherche`) et le filtre utilisé.
+
+## Sources : gérées dans la console, enregistrées en base
+
+La base (table `source_configs`) est la seule référence pour la liste des sources.
+
+- **Premier démarrage** : les sources de `sources.yaml` sont importées en base. Ensuite le fichier
+  n'est plus lu pour les sources (il garde l'annuaire et Alambic Light). Une source ajoutée plus
+  tard au fichier est signalée dans la console, avec un bouton « Importer ».
+- **Types** : dossier (droits par dossier), partage Windows SMB (ACL NTFS), FTP/FTPS (MLSD,
+  droits par dossier), S3 Amazon ou compatible MinIO/Garage/OVH/Scaleway (droits par préfixe), Alfresco (API
+  REST, droits Alfresco refus compris), GED CMIS 1.1 browser binding (Nuxeo, OpenText…, ACL CMIS),
+  SharePoint / OneDrive (Graph : utilisateurs et groupes AD synchronisés reconnus par leur SID,
+  groupes de site à associer à des groupes AD, liens de partage ignorés). Les trois derniers sont
+  testés contre des serveurs simulés : à valider sur une vraie GED / un vrai tenant.
+- **Correspondance des droits des GED** : `GROUP_Compta` → groupe AD `Compta` ; utilisateur
+  `alice` → `u:alice` (ajouté aux droits de l'utilisateur connecté) ; `GROUP_EVERYONE` → tout le
+  monde ; groupes de site Alfresco et rôles internes : ignorés.
+- **Console → Sources** : ajouter (dossier avec droits par dossier, ou partage Windows SMB),
+  « Tester l'accès » (parcours sans rien enregistrer), modifier, supprimer. Effet immédiat,
+  sans redémarrage.
+- **Exporter (YAML)** : la liste au format de `sources.yaml`, pour sauvegarder, versionner ou
+  préparer une autre installation.
+- **Mots de passe et secrets** (SMB, FTP, S3, Alfresco, CMIS, SharePoint) : saisis dans la console,
+  ils sont chiffrés (AES-256-GCM) dans la table `source_secrets`, avec la clé `SECRETS_KEY` qui
+  reste hors de la base (`.env` ou secret Docker via `SECRETS_KEY_FILE`). Jamais réaffichés,
+  journalisés ni exportés ; liés à leur source (recopiés ailleurs, ils ne se déchiffrent pas).
+  - Clé : `make secrets-key`, à sauvegarder **à part** de la base. Perdue : secrets à ressaisir
+    (index et documents intacts).
+  - Rotation : nouvelle clé dans `SECRETS_KEY`, l'ancienne dans `SECRETS_KEY_PREVIOUS`, puis
+    `make secrets-rotate`.
+  - Toujours possible : la variable d'environnement (`password_env`…), prioritaire si les deux
+    sont renseignées. Sans `SECRETS_KEY`, seule cette voie est proposée.
+- Le nom d'une source ne se modifie pas (il identifie ses documents dans l'index).
+- **Suppression** : confirmée en recopiant le nom ; retire les documents et l'historique de
+  l'index, sans toucher aux fichiers.
+- `make sync SOURCE=…` lit aussi les sources en base.
+- Dans Docker, un dossier doit être monté dans le conteneur (DOCUMENTS_DIR → `/data/partage`).
+- Les formulaires de la console refusent les requêtes venues d'un autre site (anti-CSRF).
+
+### Source « texte seul »
+
+Case « Type et données (Alambic Light) » de chaque source (`analyse_light: false` dans le YAML) :
+
+- **Cochée** (défaut) : type, données extraites, fiche interrogeable, validations.
+- **Décochée** : texte intégral seulement. Les documents avec du texte ne partent pas vers
+  Alambic Light ; les scans y sont envoyés pour leur seul texte, avec `ocr_only=true` sur
+  `POST /v1/documents/typage` (un type ou des données éventuellement renvoyés sont ignorés).
+- Décocher retire, à la synchro suivante, les types, données et fiches déjà extraits. Recocher
+  fait analyser, à la synchro suivante, les documents qui ne l'ont pas été.
+
+## Synchronisations planifiées
+
+« Synchronisation automatique » (en minutes) sur une source, dans la console : resynchronisation automatique (nouveaux
+fichiers, droits, validations Alambic Light). Minimum 5 minutes ; sans ce réglage, synchro
+manuelle (console, `make sync`). Le planificateur tourne dans l'API : une seule instance d'API
+par base pour l'instant.
+
+## API
+
+Collection Postman prête à importer : `docs/postman/alambic-search.postman_collection.json`
+(questions, recherche, listes par critères, ouverture du document cité, vignette, synchro).
+Schéma complet : `/openapi.json` (importable aussi dans Postman), documentation interactive : `/docs`.
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/ask` | `{"question", "k", "types", "formuler", "par_document"}` → réponse, `citations` (fichier, page, lien), `extraits` ou `documents`, `identifiants`, `liste` |
+| `GET` | `/search?q=…&k=8&types=FACTURE&par_document=true` | Extraits classés (ou un élément par document), sans LLM |
+| `GET` | `/recherche?valeur=GRUWE&type=FACTURE&champ=…&mentions=true` | Liste exhaustive par critères (données extraites) |
+| `GET` | `/documents/{source}/{doc_id}` | Ouvre le fichier après **revérification en direct** des droits (`?pdf=true` : bureautique en PDF) |
+| `GET` | `/vignettes/{source}/{doc_id}?page=N&l=320` | Aperçu WebP de la page |
+| `POST` | `/sources/{nom}/sync` | Synchro bloquante (scripts). **Administrateur** : HTTP Basic `admin` / `ADMIN_PASSWORD`, ou jeton avec le rôle `alambic-search:admin`. 409 si une synchro tourne ou si le garde-fou de suppression se déclenche |
+| `GET` | `/health` | État et sources chargées (sans authentification) |
+
+Identité de l'appelant (toutes les routes sauf `/health` et `/sources/…/sync`) :
+
+- **Jeton Keycloak** : `Authorization: Bearer <access_token>` émis pour le client `alambic-search`
+  (dans Postman : OAuth 2.0, code + PKCE, retour `https://oauth.pstmn.io/v1/callback` à autoriser
+  dans le client Keycloak). Groupes : annuaire, ou jeton (`groupes: jeton`).
+- **Session** du navigateur (après `/connexion`).
+- **En-têtes** `X-User` (résolu dans l'annuaire) / `X-User-Groups` : seulement avec
+  `TRUST_IDENTITY_HEADERS=true` (développement, ou derrière un proxy qui fixe ces en-têtes).
+
+En ligne de commande (pour une synchro planifiée) :
+
+```bash
+make sync SOURCE=partage-commun
+make ask Q="Quelle pénalité de retard ?" GROUPS=compta
+```
+
+## Fonctionnement
+
+```
+ged/
+  connectors/base.py        interface commune : lister, lire, droits, localiser
+  connectors/filesystem.py  partage réseau : identité par inode, droits par dossier, refus par défaut
+  extract.py                texte page par page (PDF, DOCX, TXT/MD/CSV) ; scans et images → Alambic Light
+  alambic_light.py          client Alambic Light (typage, attente 202, texte OCR, fiche)
+  chunking.py               extraits ~1200 caractères, chevauchement 200, jamais à cheval sur 2 pages
+  sync.py                   delta : ajout, modification (hash), déplacement, droits, suppression
+  store.py                  PostgreSQL + pgvector, recherche hybride RRF filtrée par droits
+  answer.py                 contexte numéroté → LLM → citations [n] vérifiées
+  api.py / cli.py           points d'entrée
+```
+
+Comportements à connaître :
+
+- **Identité stable** : un fichier renommé ou déplacé n'est pas réindexé, seuls son chemin
+  et ses droits sont mis à jour.
+- **Contenu inchangé** (date modifiée, hash identique) : pas de réindexation.
+- **Garde-fou** : si plus de 50 % des documents disparaissent d'un coup (partage démonté),
+  la synchro s'arrête sans rien supprimer. Idem si le parcours échoue en cours de route.
+- **Erreurs** : un fichier illisible est journalisé et retenté au passage suivant.
+- **Doublons** : une même copie présente à plusieurs endroits n'apparaît qu'une fois dans le contexte.
+- **Recherche plein texte** : configuration `french` (racinisation), termes combinés en OU.
+- `EMBED_DIM` fixe la dimension de la colonne vecteur à la création : changer de modèle
+  d'embeddings impose de recréer l'index.
+
+## Développement
+
+Dépendances gérées par uv (`pyproject.toml` + `uv.lock`, versionné).
+
+```bash
+cp .env.example .env               # variables locales (base, Ollama, mot de passe console)
+cp sources.example.yaml sources.yaml   # chemins adaptés à ton poste
+make install        # crée .venv et installe tout (dev compris)
+make db             # base PostgreSQL/pgvector (port 5433) + Ollama (11434) en Docker
+make pull-models    # une seule fois
+make run            # API + console en local, rechargement automatique
+make check          # lint (ruff) + tests
+make format         # reformate le code
+make test-pg        # tests + intégration PostgreSQL/pgvector (GED_TEST_DSN=...)
+make lock           # après un ajout ou une mise à jour de dépendance
+```
+
+`make run`, `make sync` et `make ask` lisent `.env` s'il existe. La base du projet écoute sur le
+port **5433** pour ne pas entrer en conflit avec un PostgreSQL déjà installé sur le poste (5432).
+Une base existante convient aussi, à condition d'y avoir l'extension pgvector : il suffit
+d'adapter `DATABASE_URL`.
+
+## Tests
+
+Les tests couvrent l'extraction, le découpage, le connecteur, la synchro (ajout, modification,
+déplacement, suppression, garde-fous, OCR requis, erreurs), le filtrage des droits avant le LLM,
+les citations et l'API de bout en bout.
+
+## Hors POC / étapes suivantes
+
+- Indexation dans un worker séparé (la console ne partage plus le processus des synchros)
+- ACL NTFS réelles (SID résolus via l'AD) et agent local avec journal USN
+- Routeur : questions agrégées (montants, dates) en SQL sur les champs extraits
+- Connecteurs SharePoint (Graph, delta token) et CMIS
+- Traitement asynchrone (Celery) pour le scan initial des gros volumes
+- Journal d'audit des questions et des accès

@@ -1,0 +1,11 @@
+.venv/
+.env
+sources.yaml
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+# Évaluation : mesures et brouillons locaux (eval/reference.json et eval/jeu.yaml, eux, se versionnent)
+eval/derniere.json
+eval/candidates.yaml

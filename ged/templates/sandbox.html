@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Bac à sable{% endblock %}
+{% from "_macros.html" import label %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Bac à sable</h1>
+    <p class="lede">Posez une question, ou listez les documents qui répondent à des critères, en vous mettant à la place d'un utilisateur : seuls les documents accessibles à ses groupes sont consultés. Rien de ce qui est fait ici n'entre dans les statistiques.</p>
+  </div>
+</header>
+
+<section class="section">
+  <form class="sandbox-form" hx-post="/admin/sandbox" hx-target="#sandbox-result" hx-indicator="#sb-wait"
+        hx-disabled-elt="find button">
+    <div class="field wide" role="tablist" aria-label="Type de recherche">
+      <div class="seg">
+        <button type="button" role="tab" aria-selected="true" data-mode="question">Question</button>
+        <button type="button" role="tab" aria-selected="false" data-mode="criteres">Liste par critères</button>
+      </div></div>
+    <div class="field wide" data-for="question">{{ label("sb-q", "Question", "Posée comme le ferait l'utilisateur. Une question de liste (« toutes les factures de M. X ») est traduite en critères si un LLM est configuré.") }}
+      <textarea id="sb-q" name="question" minlength="3" maxlength="2000"
+                placeholder="ex. Quelle est la pénalité de retard du contrat de maintenance ?"></textarea></div>
+    <div class="field" data-for="criteres" hidden>{{ label("sb-v", "Valeur cherchée", "Nom, société, numéro… cherché dans les données extraites par Alambic Light, comme mot entier, sans tenir compte des majuscules ni des accents.") }}
+      <input id="sb-v" type="text" name="valeur" placeholder="ex. GRUWE" autocomplete="off">
+      <p class="hint">Mot entier, sans tenir compte des majuscules ni des accents.</p></div>
+    <div class="field" data-for="criteres" hidden>{{ label("sb-c", "Champ", "Facultatif : limiter la recherche à un champ (ex. client). Vide : tous les champs extraits du document.") }}
+      <input id="sb-c" type="text" name="champ" list="sb-fields" placeholder="tous les champs" autocomplete="off">
+      <datalist id="sb-fields">{% for f in fields %}<option value="{{ f }}">{% endfor %}</datalist>
+      <p class="hint">Vide : la valeur est cherchée dans tous les champs extraits.</p></div>
+    {% if has_identity %}
+    <div class="field">{{ label("sb-u", "Utilisateur", "Identifiant Windows de la personne à la place de laquelle vous vous mettez. Ses groupes sont lus dans l'annuaire, groupes imbriqués compris : vous voyez exactement ce qu'elle verrait.") }}
+      <input id="sb-u" type="text" name="login" placeholder="identifiant Windows, ex. alice" autocomplete="off">
+      <p class="hint">Ses groupes sont lus dans l'annuaire, groupes imbriqués compris.</p></div>
+    <div class="field">{{ label("sb-g", "Groupes supplémentaires", "Facultatif : ajoute des groupes à ceux de l'utilisateur, pour tester une règle de droits avant de modifier l'annuaire.") }}
+      <input id="sb-g" type="text" name="groups" placeholder="facultatif" autocomplete="off"></div>
+    {% else %}
+    <div class="field">{{ label("sb-g", "Groupes de l'utilisateur", "Groupes dont la personne est membre, séparés par des virgules. Sans annuaire configuré, c'est ainsi qu'on simule un utilisateur.") }}
+      <input id="sb-g" type="text" name="groups" placeholder="ex. compta, direction" autocomplete="off">
+      <p class="hint">Séparés par des virgules. Sans groupe, aucun document n'est visible.</p></div>
+    {% endif %}
+    {% if types %}
+    <div class="field">{{ label("sb-t", "Type de document", "Limite la recherche aux documents de ce type, reconnu par Alambic Light (factures, contrats…).") }}
+      <select id="sb-t" name="doc_type"><option value="">Tous</option>
+        {% for code, label, n in types %}<option value="{{ code }}">{{ label }} ({{ n|num }})</option>{% endfor %}
+      </select></div>
+    {% endif %}
+    <div class="field" data-for="question">{{ label("sb-k", "Extraits transmis au modèle", "Nombre de passages, les mieux classés, donnés au LLM pour répondre. Plus : réponse plus complète mais plus lente, et risque de dépasser la taille de contexte du modèle (8 recommandé).") }}
+      <input id="sb-k" type="number" name="k" value="8" min="1" max="30" style="width: 110px"></div>
+    <div class="field wide" data-for="question">
+      <label class="check-label"><input type="checkbox" name="formuler" value="true" {% if has_llm %}checked{% else %}disabled{% endif %}>
+        Formuler une réponse avec le LLM</label>
+      <p class="hint">{% if has_llm %}Décoché : les extraits les plus pertinents sont rendus tels quels, sans reformulation (plus rapide).{% else %}Aucun LLM configuré (LLM_MODEL vide) : la réponse est la liste des extraits pertinents.{% endif %}</p></div>
+    <div class="field wide" data-for="question">
+      <label class="check-label"><input type="checkbox" name="par_document" value="true"> Un résultat par document</label>
+      <p class="hint">Chaque document une seule fois, avec ses pages trouvées ; « Extraits transmis » devient alors le nombre de documents (jusqu'à 3 passages chacun).</p></div>
+    <div class="wide" style="display: flex; align-items: center; gap: 14px">
+      <input type="hidden" name="mode" id="sb-mode" value="question">
+      <button class="btn" type="submit" id="sb-submit">Poser la question</button>
+      <span id="sb-wait" class="htmx-indicator hint">Recherche en cours…</span>
+    </div>
+  </form>
+</section>
+
+<div id="sandbox-result" aria-live="polite"></div>
+<script>
+  // Question / liste par critères : mêmes utilisateur, groupes et type ; champs propres à chaque mode
+  document.querySelectorAll('[role=tab][data-mode]').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      var mode = tab.dataset.mode;
+      document.getElementById('sb-mode').value = mode;
+      document.getElementById('sb-submit').textContent = mode === 'question' ? 'Poser la question' : 'Lister les documents';
+      document.querySelectorAll('[role=tab][data-mode]').forEach(function (t) {
+        t.setAttribute('aria-selected', String(t === tab));
+      });
+      document.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = el.dataset.for !== mode; });
+      document.getElementById('sandbox-result').innerHTML = '';
+      (mode === 'question' ? document.getElementById('sb-q') : document.getElementById('sb-v')).focus();
+    });
+  });
+</script>
+{% endblock %}

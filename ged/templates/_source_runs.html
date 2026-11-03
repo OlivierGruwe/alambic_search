@@ -1,0 +1,51 @@
+{% from "_macros.html" import sync_progress %}
+<div id="runs-{{ s.name }}"
+     {% if s.running %}hx-get="/admin/sources/{{ s.name }}/runs" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  <div class="section-head">
+    <div class="counts">
+      {% for st, label in DOC_LEGEND.items() %}{% if s.counts.get(st) %}<span><b>{{ s.counts.get(st)|num }}</b> {{ label }}</span>{% endif %}{% endfor %}
+      {% if not s.counts %}<span>Aucun document indexé</span>{% endif %}
+    </div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap">
+      {% if s.can_refresh_acls %}
+      <button class="btn secondary" type="button" title="Synchronise et relit les droits de TOUS les documents, même inchangés (après une réorganisation des droits, par exemple). Plus long qu'une synchro normale."
+              hx-post="/admin/sources/{{ s.name }}/sync?full=true" hx-target="#runs-{{ s.name }}" hx-swap="outerHTML"
+              {% if s.running %}disabled{% endif %}>Relire tous les droits</button>
+      {% endif %}
+      <button class="btn" type="button" title="Relit la source : ajoute les nouveaux documents, réindexe les modifiés, retire les supprimés. Les documents inchangés ne sont pas relus."
+              hx-post="/admin/sources/{{ s.name }}/sync" hx-target="#runs-{{ s.name }}" hx-swap="outerHTML"
+              {% if s.running %}disabled{% endif %}>
+        {% if s.running %}Synchronisation en cours…{% else %}Synchroniser maintenant{% endif %}
+      </button>
+    </div>
+  </div>
+  {{ sync_progress(s.progress) }}
+  {% if s.runs %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Début</th><th>Durée</th><th>Résultat</th><th class="num">Ajoutés</th><th class="num">Modifiés</th><th class="num">Déplacés</th><th class="num">Supprimés</th><th class="num">OCR requis</th>{% if light %}<th class="num" title="Envoyés à Alambic Light (OCR, type, données)">Alambic Light</th>{% endif %}<th class="num">Erreurs</th></tr></thead>
+    <tbody>
+    {% for r in s.runs %}
+      {% set rep = r.report or {} %}
+      <tr>
+        <td>{{ r.started_at|when }}</td>
+        <td>{{ duration(r.started_at, r.finished_at) }}</td>
+        <td><span class="status {{ RUN_STATUS[r.status][1] }}">{{ RUN_STATUS[r.status][0] }}</span>
+            {% if r.message %}<div class="message">{{ r.message }}</div>{% endif %}
+            {% if rep.errors %}<details><summary class="sub">{% if rep.errors|length > 1 %}Voir les {{ rep.errors|length }} erreurs{% else %}Voir l'erreur{% endif %}</summary>
+              <ul class="message">{% for e in rep.errors[:20] %}<li>{{ e }}</li>{% endfor %}</ul></details>{% endif %}
+        </td>
+        <td class="num">{{ rep.added|default('—') }}</td>
+        <td class="num">{{ rep.updated|default('—') }}</td>
+        <td class="num">{{ rep.moved|default('—') }}</td>
+        <td class="num">{{ rep.deleted|default('—') }}</td>
+        <td class="num">{{ rep.ocr_required|default('—') }}</td>
+        {% if light %}<td class="num">{{ rep.analysed|default('—') }}{% if rep.validated %}<span class="sub">{{ rep.validated }} validé{{ 's' if rep.validated > 1 }}</span>{% endif %}</td>{% endif %}
+        <td class="num">{{ rep.errors|length if rep.errors is defined else '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="empty">Aucune synchronisation pour l'instant. La première indexe tous les documents de la source.</p>
+  {% endif %}
+</div>

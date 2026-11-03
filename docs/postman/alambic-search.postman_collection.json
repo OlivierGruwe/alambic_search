@@ -1,0 +1,806 @@
+{
+  "info": {
+    "name": "Alambic Search",
+    "_postman_id": "6d6c7d1e-3b1a-4c55-9a1e-a1amb1c5ea4c",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "API d'Alambic Search (GED interrogeable).\n\nAuthentification par défaut : jeton Keycloak (OAuth 2.0, code + PKCE) — onglet Authorization de la collection → « Get New Access Token ». Le client Keycloak doit accepter l'adresse de retour https://oauth.pstmn.io/v1/callback.\n\nToutes les réponses ne contiennent que les documents que l'utilisateur a le droit de lire."
+  },
+  "auth": {
+    "type": "oauth2",
+    "oauth2": [
+      {
+        "key": "grant_type",
+        "value": "authorization_code_with_pkce",
+        "type": "string"
+      },
+      {
+        "key": "authUrl",
+        "value": "{{keycloakUrl}}/realms/{{realm}}/protocol/openid-connect/auth",
+        "type": "string"
+      },
+      {
+        "key": "accessTokenUrl",
+        "value": "{{keycloakUrl}}/realms/{{realm}}/protocol/openid-connect/token",
+        "type": "string"
+      },
+      {
+        "key": "clientId",
+        "value": "{{clientId}}",
+        "type": "string"
+      },
+      {
+        "key": "clientSecret",
+        "value": "{{clientSecret}}",
+        "type": "string"
+      },
+      {
+        "key": "scope",
+        "value": "openid",
+        "type": "string"
+      },
+      {
+        "key": "redirect_uri",
+        "value": "https://oauth.pstmn.io/v1/callback",
+        "type": "string"
+      },
+      {
+        "key": "challengeAlgorithm",
+        "value": "S256",
+        "type": "string"
+      },
+      {
+        "key": "client_authentication",
+        "value": "body",
+        "type": "string"
+      },
+      {
+        "key": "addTokenTo",
+        "value": "header",
+        "type": "string"
+      },
+      {
+        "key": "tokenName",
+        "value": "Alambic Search",
+        "type": "string"
+      },
+      {
+        "key": "useBrowser",
+        "value": false,
+        "type": "boolean"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8002"
+    },
+    {
+      "key": "keycloakUrl",
+      "value": "http://localhost:8180"
+    },
+    {
+      "key": "realm",
+      "value": "alambic"
+    },
+    {
+      "key": "clientId",
+      "value": "alambic-search"
+    },
+    {
+      "key": "clientSecret",
+      "value": "dev-alambic-search-a-changer"
+    },
+    {
+      "key": "groups",
+      "value": "compta"
+    },
+    {
+      "key": "user",
+      "value": ""
+    },
+    {
+      "key": "adminPassword",
+      "value": ""
+    },
+    {
+      "key": "syncSource",
+      "value": "partage-commun"
+    },
+    {
+      "key": "doc_url",
+      "value": ""
+    },
+    {
+      "key": "source",
+      "value": ""
+    },
+    {
+      "key": "doc_path",
+      "value": ""
+    },
+    {
+      "key": "page",
+      "value": "1"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Recherche (jeton Keycloak)",
+      "item": [
+        {
+          "name": "Question — réponse rédigée",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Réponse rédigée par le LLM, avec citations [n] → fichier, page, lien. Les droits sont appliqués AVANT le LLM.",
+            "url": {
+              "raw": "{{baseUrl}}/ask",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ask"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Quelle est la pénalité de retard du contrat de maintenance ?\",\n  \"k\": 8\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Question — extraits seuls (sans LLM)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Les passages les plus pertinents, tels quels (champ `extraits`). Rapide, pas de LLM.",
+            "url": {
+              "raw": "{{baseUrl}}/ask",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ask"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"pénalité de retard\",\n  \"formuler\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Question — un résultat par document",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Chaque document une seule fois (`documents` : url, extrait, pages trouvées avec leurs liens). `k` = nombre de documents.",
+            "url": {
+              "raw": "{{baseUrl}}/ask",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ask"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"maintenance Durand\",\n  \"formuler\": false,\n  \"par_document\": true,\n  \"k\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Question — identifiant (n° de permis…)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Identifiant dans la question : seuls les documents qui le contiennent tel quel (`identifiants`, `identifiants_introuvables`).",
+            "url": {
+              "raw": "{{baseUrl}}/ask",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ask"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"G6006-270173-05\",\n  \"formuler\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Question — limitée à un type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "`types` : codes Alambic Light (FACTURE, RIB…).",
+            "url": {
+              "raw": "{{baseUrl}}/ask",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ask"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"montant à payer\",\n  \"types\": [\n    \"FACTURE\"\n  ],\n  \"formuler\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recherche — extraits classés",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Recherche hybride (mots + sens), sans LLM. `types=FACTURE,CONTRAT` pour filtrer.",
+            "url": {
+              "raw": "{{baseUrl}}/search?q=pénalité de retard&k=8",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "pénalité de retard"
+                },
+                {
+                  "key": "k",
+                  "value": "8"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recherche — un résultat par document",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Un élément par document, avec ses pages trouvées.",
+            "url": {
+              "raw": "{{baseUrl}}/search?q=maintenance Durand&k=10&par_document=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "maintenance Durand"
+                },
+                {
+                  "key": "k",
+                  "value": "10"
+                },
+                {
+                  "key": "par_document",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Liste par critères (toutes les factures de GRUWE)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Liste EXHAUSTIVE des documents dont une donnée extraite contient `valeur` (mot entier, sans casse ni accents). `champ` pour un champ précis ; `mentions=false` pour ne pas lister les simples mentions dans le texte.",
+            "url": {
+              "raw": "{{baseUrl}}/recherche?valeur=GRUWE&type=FACTURE",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "recherche"
+              ],
+              "query": [
+                {
+                  "key": "valeur",
+                  "value": "GRUWE"
+                },
+                {
+                  "key": "type",
+                  "value": "FACTURE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Ouvrir le document cité",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Fichier original, après revérification EN DIRECT des droits dans la source (403 si l'accès a été retiré). Lancer d'abord une question : l'adresse est reprise de la première citation.",
+            "url": {
+              "raw": "{{baseUrl}}{{doc_url}}",
+              "host": [
+                "{{baseUrl}}{{doc_url}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Vignette de la page citée",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Aperçu WebP de la page (l = 160, 320 ou 480 px). Droits de l'index ; 404 si non autorisé. Lancer d'abord une question.",
+            "url": {
+              "raw": "{{baseUrl}}/vignettes/{{source}}/{{doc_path}}?page={{page}}&l=320",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "vignettes",
+                "{{source}}",
+                "{{doc_path}}"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "l",
+                  "value": "320"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Recherche (en-têtes, développement)",
+      "item": [
+        {
+          "name": "Question (en-têtes)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Groups",
+                "value": "{{groups}}",
+                "description": "Groupes de l'utilisateur, séparés par des virgules"
+              },
+              {
+                "key": "X-User",
+                "value": "{{user}}",
+                "description": "Identifiant résolu dans l'annuaire (facultatif)",
+                "disabled": true
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Identité transmise par en-têtes. Seulement si TRUST_IDENTITY_HEADERS=true (développement, ou derrière un proxy qui fixe ces en-têtes).",
+            "url": {
+              "raw": "{{baseUrl}}/ask",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ask"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"pénalité de retard\",\n  \"formuler\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recherche (en-têtes)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Groups",
+                "value": "{{groups}}",
+                "description": "Groupes de l'utilisateur, séparés par des virgules"
+              },
+              {
+                "key": "X-User",
+                "value": "{{user}}",
+                "description": "Identifiant résolu dans l'annuaire (facultatif)",
+                "disabled": true
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/search?q=facture&par_document=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "facture"
+                },
+                {
+                  "key": "par_document",
+                  "value": "true"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Garde le premier document cité pour « Ouvrir » et « Vignette »",
+                  "const r = pm.response.json();",
+                  "const c = (r.citations || [])[0] || (r.documents || [])[0] || (Array.isArray(r) ? r[0] : null);",
+                  "if (c && c.url) {",
+                  "  pm.collectionVariables.set(\"doc_url\", c.url.split(\"#\")[0]);",
+                  "  const m = c.url.match(/^\\/documents\\/([^/]+)\\/(.+?)(\\?|#|$)/);",
+                  "  if (m) { pm.collectionVariables.set(\"source\", m[1]); pm.collectionVariables.set(\"doc_path\", m[2]); }",
+                  "  pm.collectionVariables.set(\"page\", String(c.page || ((c.url.match(/#page=(\\d+)/) || [])[1]) || 1));",
+                  "}",
+                  "pm.test(\"200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Liste par critères (en-têtes)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Groups",
+                "value": "{{groups}}",
+                "description": "Groupes de l'utilisateur, séparés par des virgules"
+              },
+              {
+                "key": "X-User",
+                "value": "{{user}}",
+                "description": "Identifiant résolu dans l'annuaire (facultatif)",
+                "disabled": true
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/recherche?valeur=GRUWE",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "recherche"
+              ],
+              "query": [
+                {
+                  "key": "valeur",
+                  "value": "GRUWE"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Administration",
+      "item": [
+        {
+          "name": "État du service",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Sans authentification : sources chargées, LLM présent.",
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Synchroniser une source",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "description": "Synchro bloquante (scripts, cron) : parcours + delta, renvoie le rapport. Administrateur : HTTP Basic admin / ADMIN_PASSWORD, ou jeton avec le rôle alambic-search:admin. 409 si une synchro tourne déjà ou si le garde-fou de suppression se déclenche.",
+            "url": {
+              "raw": "{{baseUrl}}/sources/{{syncSource}}/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sources",
+                "{{syncSource}}",
+                "sync"
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "admin",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Description OpenAPI",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Schéma complet de l'API (importable dans Postman). Documentation interactive : {{baseUrl}}/docs",
+            "url": {
+              "raw": "{{baseUrl}}/openapi.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi.json"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

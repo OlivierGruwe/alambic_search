@@ -1,0 +1,73 @@
+{% from "_macros.html" import thumb %}
+{% if error %}
+<div class="error-box" role="alert">{{ error }}</div>
+{% elif r %}
+<section class="section" aria-labelledby="res-title">
+  <h2 id="res-title">{{ r.documents|length|num }} document{{ 's' if r.documents|length > 1 }}{% if r.doc_type %} ({{ (r.documents[0].label if r.documents else r.doc_type)|lower }}){% endif %} pour « {{ r.value }} »</h2>
+  {% if answer %}<p class="hint">Question comprise comme une liste{% if r.doc_type %} de type {{ r.doc_type }}{% endif %} pour « {{ r.value }} ».</p>{% endif %}
+  <p class="hint">Liste complète{% if not r.complete %} (tronquée : précisez votre recherche){% endif %} des documents auxquels vous avez accès, d'après les données reconnues dans chaque document.</p>
+  {% if r.documents %}
+  <ul class="doc-list">
+    {% for m in r.documents %}
+    {% set href = "/documents/" ~ m.source ~ "/" ~ (m.doc_id|urlencode) %}
+    <li class="with-thumb">{{ thumb(thumb_url(m.source, m.doc_id, m.path, 1), href) }}<div>
+      <a class="fname" href="{{ href }}" target="_blank" rel="noopener">{{ m.path|basename }}</a>
+      <span class="sub path">{{ m.path|dirname }}</span>
+      <div class="match-fields">{% for k, v, check in m.fields %}<span>{{ k|field_name }} : <mark>{{ v|truncate(120) }}</mark>{% if check %} <span class="status warn" title="Valeur lue automatiquement, pas encore confirmée">à vérifier</span>{% endif %}</span>{% endfor %}</div></div></li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="empty">Aucun document trouvé.</p>{% endif %}
+</section>
+{% if r.mentions %}
+<section class="section" aria-labelledby="ment-title">
+  <h2 id="ment-title">Autres documents qui mentionnent « {{ r.value }} »</h2>
+  <p class="hint">Le nom apparaît dans le texte, sans être reconnu comme une donnée du document. À regarder.</p>
+  <ul class="doc-list">
+    {% for m in r.mentions %}
+    {% set href = "/documents/" ~ m.source ~ "/" ~ (m.doc_id|urlencode) ~ "#page=" ~ m.page %}
+    <li class="with-thumb">{{ thumb(thumb_url(m.source, m.doc_id, m.path, m.page), href) }}<div>
+      <a class="fname" href="{{ href }}" target="_blank" rel="noopener">{{ m.path|basename }}</a>
+      <span class="sub">{{ m.label or "Non typé" }}, page {{ m.page }}</span><p class="excerpt">{{ m.excerpt }}</p></div></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% elif answer %}
+{% set cited = answer.citations|map(attribute='n')|list %}
+<section class="section" aria-labelledby="ans-title">
+  {% if answer.generated %}
+  <h2 id="ans-title">Réponse</h2>
+  <div class="answer">{{ answer.text|cites(cited) }}</div>
+  {% elif answer.documents %}
+  <h2 id="ans-title">Documents les plus pertinents</h2>
+  {% elif answer.hits %}
+  <h2 id="ans-title">Passages les plus pertinents</h2>
+  {% else %}
+  <div class="answer">{{ answer.text }}</div>
+  {% endif %}
+  {% if answer.identifiers %}<p class="hint ident-note">Limité aux documents qui contiennent {% for i in answer.identifiers %}« {{ i }} »{{ " et " if not loop.last }}{% endfor %} tel quel (texte ou données).</p>{% elif answer.identifiers_absent %}<p class="hint ident-note">Aucun document accessible ne contient {% for i in answer.identifiers_absent %}« {{ i }} »{{ " ni " if not loop.last }}{% endfor %} tel quel : résultats par ressemblance, à vérifier.</p>{% endif %}
+  {% if answer.documents %}
+  {% if answer.generated %}<h3 class="sources-title">Documents</h3>{% endif %}
+  <ol class="doc-list sources">
+    {% for d in answer.documents if not answer.generated or d.n in cited %}
+    <li class="with-thumb">{{ thumb(thumb_url(d.source, d.doc_id, d.path, d.best.page), d.url) }}<div><span class="cite">{{ d.n }}</span>
+      <a class="fname" href="{{ d.url }}" target="_blank" rel="noopener">{{ d.path|basename }}</a>
+      <span class="sub">{% if d.label %}{{ d.label }} · {% endif %}{{ d.pages|length }} page{{ 's' if d.pages|length > 1 }} :
+        {% for p, u in d.pages %}<a href="{{ u }}" target="_blank" rel="noopener" title="Ouvrir à la page {{ p }}">{{ p }}</a>{{ ", " if not loop.last }}{% endfor %}</span>
+      {% if not answer.generated %}<p class="excerpt">{{ d.best.text|truncate(700) }}</p>{% endif %}</div></li>
+    {% endfor %}
+  </ol>
+  {% elif answer.citations %}
+  <h3 class="sources-title">Sources</h3>
+  <ol class="doc-list sources">
+    {% for c in answer.citations %}
+    {% set h = answer.hits[c.n - 1] %}
+    <li class="with-thumb">{{ thumb(thumb_url(c.source, c.doc_id, c.path, c.page), c.url) }}<div><span class="cite">{{ c.n }}</span>
+      <a class="fname" href="{{ c.url }}" target="_blank" rel="noopener">{{ c.path|basename }}</a>
+      <span class="sub">{% if h.doc_label %}{{ h.doc_label }}, {% endif %}page {{ c.page }}</span>
+      {% if not answer.generated %}<p class="excerpt">{{ h.text|truncate(700) }}</p>{% endif %}</div></li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+</section>
+{% endif %}

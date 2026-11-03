@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Supprimer {{ src_name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="sub"><a href="/admin/sources">Sources</a></p>
+    <h1>Supprimer « {{ src_name }} »</h1>
+  </div>
+</header>
+<section class="section" style="max-width: 640px">
+  {% if error %}<div class="error-box" role="alert" style="margin-bottom: 16px">{{ error }}</div>{% endif %}
+  <p>{{ count|num }} document{{ 's' if count > 1 }} de cette source {{ 'seront retirés' if count > 1 else 'sera retiré' }} de l'index, avec l'historique de ses synchronisations. Les questions n'y auront plus accès.</p>
+  <p class="hint">Les fichiers eux-mêmes ne sont pas touchés : ils restent dans le dossier ou le partage.</p>
+  {% if running %}<div class="error-box">Synchronisation en cours : attendez qu'elle se termine.</div>
+  {% else %}
+  <form method="post" style="display: flex; flex-direction: column; gap: 14px; margin-top: 16px">
+    <div class="field"><label for="c">Pour confirmer, recopiez le nom : <b>{{ src_name }}</b></label>
+      <input id="c" name="confirm" autocomplete="off" required></div>
+    <div style="display: flex; gap: 12px">
+      <button class="btn danger" type="submit">Supprimer la source</button>
+      <a class="btn secondary" href="/admin/sources">Annuler</a>
+    </div>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

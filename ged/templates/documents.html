@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Documents{% endblock %}
+{% from "_macros.html" import label %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Documents</h1>
+    <p class="lede">Tout ce que l'index connaît : statut, droits appliqués et extraits utilisés pour répondre.</p>
+  </div>
+</header>
+
+<form class="filters" hx-get="/admin/documents" hx-target="#doc-results" hx-push-url="true"
+      hx-trigger="change, input from:#f-q delay:350ms, submit">
+  <div class="field">{{ label("f-q", "Chemin contient", "Partie du chemin ou du nom de fichier (ex. factures/2026). Pour chercher dans le contenu, utilisez le bac à sable.") }}
+    <input id="f-q" type="search" name="q" value="{{ f.q }}" placeholder="ex. factures/2026"></div>
+  <div class="field"><label for="f-source">Source</label>
+    <select id="f-source" name="source"><option value="">Toutes</option>
+      {% for s in sources %}<option value="{{ s }}" {% if f.source == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select></div>
+  <div class="field">{{ label("f-status", "Statut", "Indexé : interrogeable. OCR requis : scan sans texte (Alambic Light non configuré). En erreur : retenté à la prochaine synchro. Non pris en charge : format non lu.") }}
+    <select id="f-status" name="status"><option value="">Tous</option>
+      {% for st, label in DOC_STATUS.items() %}<option value="{{ st }}" {% if f.status == st %}selected{% endif %}>{{ label[0] }}</option>{% endfor %}
+    </select></div>
+  {% if types %}
+  <div class="field">{{ label("f-type", "Type", "Type reconnu par Alambic Light. Le nombre entre parenthèses compte les documents de ce type.") }}
+    <select id="f-type" name="type"><option value="">Tous</option>
+      {% for code, label, n in types %}<option value="{{ code }}" {% if f.type == code %}selected{% endif %}>{{ label }} ({{ n|num }})</option>{% endfor %}
+    </select></div>
+  {% endif %}
+  <noscript><button class="btn" type="submit">Filtrer</button></noscript>
+</form>
+
+<div class="split">
+  <section class="section" style="margin: 0" id="doc-results">
+    {% include "_doc_table.html" %}
+  </section>
+  <aside class="panel" id="detail" aria-live="polite"></aside>
+</div>
+{% endblock %}

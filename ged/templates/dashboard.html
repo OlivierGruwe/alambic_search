@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sync_progress %}
+{% block title %}Tableau de bord{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Tableau de bord</h1>
+    <p class="lede">État de l'index et activité des {{ activity|length }} derniers jours.</p>
+  </div>
+  <a class="btn secondary" href="/admin/sources">Gérer les sources</a>
+</header>
+
+<section class="section" aria-labelledby="still-title">
+  <div class="section-head">
+    <div>
+      <h2 id="still-title">Documents de toutes les sources</h2>
+      <p>Où en est chaque document après son passage dans la chaîne de traitement.</p>
+    </div>
+  </div>
+  {% if total %}
+  <div class="still">
+    <div class="still-total"><strong>{{ total|num }}</strong><span>documents connus de l'index</span></div>
+    <div class="still-bar" role="img" aria-label="{% for s in segments %}{{ DOC_STATUS[s.status][0] }} {{ s.count }}{% if not loop.last %}, {% endif %}{% endfor %}">
+      {% for s in segments %}<a class="seg-{{ s.status }}" style="flex: {{ s.count }} 1 0" href="/admin/documents?status={{ s.status }}" title="{{ DOC_STATUS[s.status][0] }} : {{ s.count|num }}"></a>{% endfor %}
+    </div>
+    <ul class="still-legend">
+      {% for s in segments %}
+      <li><i class="seg-{{ s.status }}"></i><a href="/admin/documents?status={{ s.status }}"><b>{{ s.count|num }}</b></a> {{ DOC_LEGEND[s.status] }} <span>{{ '%.0f'|format(s.pct) }} %</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% else %}
+  <p class="empty">L'index est vide. Lancez une première synchronisation depuis la page <a href="/admin/sources">Sources</a>.</p>
+  {% endif %}
+</section>
+
+<div class="grid-2">
+  <section class="section" aria-labelledby="q-title">
+    <div class="section-head">
+      <div>
+        <h2 id="q-title">Questions posées</h2>
+        <p>Hors bac à sable. En orange, les questions restées sans source citée.</p>
+      </div>
+    </div>
+    <dl class="figures">
+      <div><dt>questions</dt><dd>{{ asked|num }}</dd></div>
+      <div><dt>sans source citée</dt><dd>{% if asked %}{{ '%.0f'|format(100 * unanswered / asked) }} %{% else %}—{% endif %}</dd></div>
+    </dl>
+    <div class="spark" role="img" aria-label="Questions par jour sur {{ activity|length }} jours">
+      {% for day, n, miss in activity %}
+      <div class="spark-col" title="{{ day }} : {{ n }} question{{ 's' if n > 1 }}, dont {{ miss }} sans source">
+        <div class="spark-bar" style="height: {{ (100 * n / peak)|round(1) }}%">{% if n %}<i style="height: {{ (100 * miss / n)|round(1) }}%"></i>{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="spark-days" aria-hidden="true">{% for day, n, miss in activity %}<span>{{ day[8:] }}</span>{% endfor %}</div>
+  </section>
+
+  <section class="section" aria-labelledby="todo-title">
+    <div class="section-head">
+      <div>
+        <h2 id="todo-title">À traiter</h2>
+        <p>{% if todo_total %}{{ todo_total|num }} document{{ 's' if todo_total > 1 }} non interrogeable{{ 's' if todo_total > 1 }}.{% else %}Rien à signaler.{% endif %}</p>
+      </div>
+      {% if todo_total %}<a href="/admin/documents?status=error">Voir tout</a>{% endif %}
+    </div>
+    {% if todo %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Document</th><th>Statut</th></tr></thead>
+      <tbody>
+      {% for d in todo %}
+        <tr><td><span class="fname">{{ d.path|basename }}</span><span class="sub path">{{ d.path|dirname }}</span><span class="sub">{{ d.error or "Aucun texte extractible : à passer dans Alambic pour l'OCR" }}</span></td>
+            <td><span class="status {{ DOC_STATUS[d.status][1] }}">{{ DOC_STATUS[d.status][0] }}</span></td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+    <p class="empty">Tous les documents connus sont interrogeables.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="section" aria-labelledby="src-title" style="margin-top: 24px">
+  <div class="section-head"><h2 id="src-title">Sources</h2></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Source</th><th class="num">Indexés</th><th class="num">À traiter</th><th>Dernière synchronisation</th></tr></thead>
+    <tbody>
+    {% for s in sources %}
+      <tr>
+        <td><a href="/admin/sources#src-{{ s.name }}"><b>{{ s.name }}</b></a><span class="sub">{{ s.info.type }}</span></td>
+        <td class="num">{{ s.indexed|num }}</td>
+        <td class="num">{{ s.todo|num }}</td>
+        <td>
+          {% if s.running %}<span class="status run">En cours</span>{{ sync_progress(s.progress, compact=True) }}
+          {% elif s.last %}<span class="status {{ RUN_STATUS[s.last.status][1] }}">{{ RUN_STATUS[s.last.status][0] }}</span><span class="sub">{{ s.last.started_at|when }}</span>
+          {% else %}<span class="sub">Jamais synchronisée</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

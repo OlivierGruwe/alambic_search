@@ -1,0 +1,56 @@
+{% extends "user_base.html" %}
+{% block title %}Rechercher{% endblock %}
+{% from "_macros.html" import label, help %}
+{% block content %}
+<section class="section">
+  <form class="sandbox-form" hx-post="/rechercher" hx-target="#result" hx-indicator="#wait" hx-disabled-elt="find button[type=submit]">
+    <div class="field wide" role="tablist" aria-label="Type de recherche">
+      <div class="seg">
+        <button type="button" role="tab" aria-selected="true" data-mode="question">Poser une question</button>
+        <button type="button" role="tab" aria-selected="false" data-mode="criteres">Lister des documents</button>
+      </div></div>
+    <div class="field wide" data-for="question">{{ label("q", "Votre question", "Posez-la comme à un collègue. La réponse ne s'appuie que sur les documents que vous avez le droit de lire, et cite ses sources. Entrée : envoyer ; Maj+Entrée : nouvelle ligne.") }}
+      <textarea id="q" name="question" maxlength="2000" autofocus
+                placeholder="ex. Quelle est la pénalité de retard du contrat de maintenance ?"></textarea></div>
+    <div class="field" data-for="criteres" hidden>{{ label("v", "Nom, société ou numéro", "Donne TOUS les documents dont les données reconnues contiennent ce mot (ex. toutes les factures d'un client), puis, à part, ceux qui le citent seulement dans leur texte.") }}
+      <input id="v" type="text" name="valeur" placeholder="ex. GRUWE" autocomplete="off">
+      <p class="hint">Tous les documents dont les données contiennent ce mot, sans tenir compte des majuscules ni des accents.</p></div>
+    {% if types %}
+    <div class="field">{{ label("t", "Type de document", "Limite la recherche à un type de document (factures, contrats…).") }}
+      <select id="t" name="doc_type"><option value="">Tous</option>
+        {% for code, label, n in types %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+      </select></div>
+    {% endif %}
+    {% if has_llm %}
+    <div class="field wide" data-for="question">
+      <div class="label-row"><label class="check-label"><input type="checkbox" name="formuler" value="true" checked> Rédiger une réponse</label>{{ help("h-formuler", "Coché : une réponse rédigée, avec ses sources. Décoché : les passages les plus pertinents, tels quels, plus vite.") }}</div>
+      <p class="hint">Décoché : les passages les plus pertinents des documents, tels quels.</p></div>
+    {% endif %}
+    <div class="field wide" data-for="question">
+      <div class="label-row"><label class="check-label"><input type="checkbox" name="par_document" value="true"> Un résultat par document</label>{{ help("h-pardoc", "Coché : chaque document n'apparaît qu'une fois, même si la recherche le trouve à plusieurs endroits ; ses pages concernées sont indiquées, chacune avec son lien. Pratique pour savoir quels documents ouvrir.") }}</div></div>
+    <div class="wide" style="display: flex; align-items: center; gap: 14px">
+      <input type="hidden" name="mode" id="mode" value="question">
+      <button class="btn" type="submit" id="go">Rechercher</button>
+      <span id="wait" class="htmx-indicator hint">Recherche en cours…</span>
+    </div>
+  </form>
+</section>
+<div id="result" aria-live="polite"></div>
+<script>
+  document.querySelectorAll('[role=tab][data-mode]').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      var mode = tab.dataset.mode;
+      document.getElementById('mode').value = mode;
+      document.getElementById('go').textContent = mode === 'question' ? 'Rechercher' : 'Lister';
+      document.querySelectorAll('[role=tab][data-mode]').forEach(function (t) { t.setAttribute('aria-selected', String(t === tab)); });
+      document.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = el.dataset.for !== mode; });
+      document.getElementById('result').innerHTML = '';
+      document.getElementById(mode === 'question' ? 'q' : 'v').focus();
+    });
+  });
+  // Entrée envoie la question (Maj+Entrée : retour à la ligne)
+  document.getElementById('q').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.form.requestSubmit(); }
+  });
+</script>
+{% endblock %}

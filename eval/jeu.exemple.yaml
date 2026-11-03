@@ -1,0 +1,35 @@
+# Jeu de questions de référence d'Alambic Search — exemple à adapter.
+# Copier en eval/jeu.yaml, remplacer par 30 à 100 vraies questions sur VOS documents.
+# Aide : make eval-generer (questions candidates tirées de l'index, à relire).
+#
+# Bonnes pratiques :
+#  - des questions posées comme par les utilisateurs (vocabulaire réel, fautes comprises) ;
+#  - des types variés : fait précis, identifiant (n° de facture, de permis), synthèse, liste ;
+#  - 10 % de questions SANS réponse dans les documents (sans_reponse: true) ;
+#  - quelques documents « interdits » pour vérifier qu'aucun droit ne fuit.
+
+defaut:
+  groupes: [compta]          # ou : utilisateur: olivier (groupes lus dans l'annuaire)
+  k: 8
+
+questions:
+  - id: penalite-maintenance
+    question: Quelle est la pénalité de retard du contrat de maintenance ?
+    documents: [Compta/contrat-fournisseur.docx]
+    pages: [1]
+    mots: ["2 %"]
+
+  - id: facture-acme-montant
+    question: combien on doit à ACME sur la facture 2026-114
+    documents: [facture-acme.pdf]
+    mots: ["4 850"]
+
+  - id: salaires-interdits
+    question: grille des salaires 2026
+    groupes: [compta]
+    documents: [RH/salaires.txt]     # la compta ne doit PAS le trouver : « non retrouvé » attendu
+    interdits: [RH/salaires.txt]     # et s'il apparaît : FUITE
+
+  - id: hors-sujet
+    question: Quel est le cours de l'or aujourd'hui ?
+    sans_reponse: true

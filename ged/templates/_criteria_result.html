@@ -1,0 +1,52 @@
+{% if error %}
+<div class="error-box">{{ error }}</div>
+{% else %}
+<section class="section" aria-labelledby="crit-title">
+  <div class="section-head">
+    <div>
+      <h2 id="crit-title">{{ r.documents|length|num }} document{{ 's' if r.documents|length > 1 }}{% if r.doc_type %} de type {{ type_label }}{% endif %}{% if r.field %} dont le champ « {{ r.field|field_name }} »{% else %} dont un champ{% endif %} contient « {{ r.value }} »</h2>
+      <p>Liste complète{% if not r.complete %} : <b>tronquée à {{ r.documents|length|num }}</b>, précisez les critères{% endif %}, d'après les données extraites par Alambic Light, limitée aux documents accessibles ({{ groups|length }} groupe{{ 's' if groups|length > 1 }} et identité{{ 's' if groups|length > 1 }}). {{ ms|num }} ms.</p>
+    </div>
+  </div>
+  {% if r.documents %}
+  {% if r.doubtful %}<p class="hint" style="margin-bottom: 10px"><span class="status warn">{{ r.doubtful }} à vérifier</span> la valeur trouvée n'a pas encore été confirmée dans Alambic Light.</p>{% endif %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Document</th><th>Type</th><th>Champs correspondants</th></tr></thead>
+    <tbody>
+    {% for m in r.documents %}
+      <tr>
+        <td><a class="fname" href="/admin/documents?q={{ m.path|urlencode }}">{{ m.path|basename }}</a><span class="sub path">{{ m.path|dirname or "(racine)" }}</span></td>
+        <td class="nowrap">{{ m.label or "—" }}</td>
+        <td><div class="match-fields">{% for k, v, check in m.fields %}<span>{{ k|field_name }} : <mark>{{ v|truncate(120) }}</mark>{% if check %} <span class="status warn">à vérifier</span>{% endif %}</span>{% endfor %}</div></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="empty">Aucun document ne correspond dans les données extraites.</p>
+  {% endif %}
+</section>
+
+{% if r.mentions %}
+<section class="section" aria-labelledby="ment-title">
+  <div class="section-head">
+    <div>
+      <h2 id="ment-title">À regarder : {{ r.mentions|length|num }} autre{{ 's' if r.mentions|length > 1 }} document{{ 's' if r.mentions|length > 1 }} mentionnant « {{ r.value }} »</h2>
+      <p>Le texte contient la valeur, mais aucun champ extrait ne correspond : document {% if r.doc_type %}non typé, {% endif %}mal extrait, ou personne simplement citée. Ils ne sont pas comptés ci-dessus.</p>
+    </div>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Document</th><th>Type</th><th>Passage</th></tr></thead>
+    <tbody>
+    {% for m in r.mentions %}
+      <tr>
+        <td><a class="fname" href="/admin/documents?q={{ m.path|urlencode }}">{{ m.path|basename }}</a><span class="sub path">{{ m.path|dirname or "(racine)" }}</span><span class="sub">page {{ m.page }}</span></td>
+        <td class="nowrap">{{ m.label or "Non typé" }}</td>
+        <td><p class="excerpt">{{ m.excerpt }}</p></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endif %}

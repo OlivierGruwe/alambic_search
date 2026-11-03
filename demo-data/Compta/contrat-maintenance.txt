@@ -1,0 +1,5 @@
+Contrat de maintenance informatique.
+
+Pénalité de retard : 2 % du montant par semaine de retard, plafonnée à 10 %.
+
+Durée : 3 ans, reconduction tacite.

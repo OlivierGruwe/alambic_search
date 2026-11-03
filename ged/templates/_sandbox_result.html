@@ -1,0 +1,82 @@
+{% from "_macros.html" import thumb %}
+{% if error %}
+<div class="error-box">{{ error }}</div>
+{% elif answer.criteria %}
+{% set r = answer.criteria %}
+<section class="section" aria-labelledby="ans-title">
+  <h2 id="ans-title">Réponse</h2>
+  <div class="answer">{{ answer.text }}</div>
+  <p class="hint" style="margin-top: 8px">Question comprise comme une liste par critères :
+    {% if r.doc_type %}type <b>{{ r.doc_type }}</b>, {% endif %}{% if r.field %}champ <b>{{ r.field }}</b>, {% endif %}valeur <b>« {{ r.value }} »</b>.
+    La liste vient des données extraites, pas du modèle. {{ ms|num }} ms.</p>
+</section>
+{% set type_label = answer.criteria.documents[0].label if answer.criteria.documents else r.doc_type %}
+{% include "_criteria_result.html" %}
+{% else %}
+<section class="section" aria-labelledby="ans-title">
+  <h2 id="ans-title">{% if answer.generated %}Réponse{% else %}Extraits pertinents{% endif %}</h2>
+  {% if answer.generated %}<div class="answer">{{ answer.text|cites(cited) }}</div>
+  {% elif answer.hits %}<p class="hint">Sans formulation par le LLM : les extraits ci-dessous, dans l'ordre du classement, sont la réponse.</p>
+  {% else %}<div class="answer">{{ answer.text }}</div>{% endif %}
+  {% if answer.identifiers %}<p class="hint ident-note">Limité aux documents qui contiennent {% for i in answer.identifiers %}« {{ i }} »{{ " et " if not loop.last }}{% endfor %} tel quel (texte ou données).</p>{% elif answer.identifiers_absent %}<p class="hint ident-note">Aucun document accessible ne contient {% for i in answer.identifiers_absent %}« {{ i }} »{{ " ni " if not loop.last }}{% endfor %} tel quel : résultats par ressemblance, à vérifier.</p>{% endif %}
+  <div class="answer-meta">
+    <span>{% if login %}Utilisateur : {{ login }}, {% endif %}{{ groups|length }} groupe{{ 's' if groups|length > 1 }} et identité{{ 's' if groups|length > 1 }}</span>
+    <span>{{ answer.hits|length }} extrait{{ 's' if answer.hits|length > 1 }} retrouvé{{ 's' if answer.hits|length > 1 }}, {{ answer.citations|length }} cité{{ 's' if answer.citations|length > 1 }}</span>
+    <span>{{ ms|num }} ms</span>
+  </div>
+  {% if groups %}<details style="margin-top: 10px"><summary class="sub">Voir les groupes et identités utilisés pour filtrer</summary>
+    <span class="groups" style="margin-top: 8px">{% for p in groups %}<span class="group" title="{{ p }}">{{ pname(p) }}</span>{% endfor %}</span>
+  </details>{% endif %}
+</section>
+
+{% if answer.documents %}
+<section class="section" aria-labelledby="docs-title">
+  <div class="section-head">
+    <div>
+      <h2 id="docs-title">{% if answer.generated %}Documents transmis au modèle{% else %}Documents retrouvés{% endif %}</h2>
+      <p>Un par document, dans l'ordre de leur meilleur passage ; jusqu'à 3 passages de chacun{% if answer.generated %} sont transmis. Les numéros en vert sont ceux cités{% endif %}.</p>
+    </div>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Réf.</th><th>Document</th><th>Pages</th><th class="num">Score</th></tr></thead>
+    <tbody>
+    {% for d in answer.documents %}
+      <tr>
+        <td><span class="cite {% if answer.generated and d.n not in cited %}unused{% endif %}">{{ d.n }}</span></td>
+        <td class="with-thumb">{{ thumb(thumb_url(d.source, d.doc_id, d.path, d.best.page, admin=True), d.url) }}<div><a class="path" href="/admin/documents?q={{ d.path|urlencode }}">{{ d.path }}</a>{% if d.label %} <span class="sub" style="display: inline">· {{ d.label }}</span>{% endif %}
+          · <a href="{{ d.url }}" target="_blank" rel="noopener">ouvrir</a><p class="excerpt">{{ d.best.text|truncate(320 if answer.generated else 900) }}</p></div></td>
+        <td>{% for p, u in d.pages %}<a href="{{ u }}" target="_blank" rel="noopener">{{ p }}</a>{{ ", " if not loop.last }}{% endfor %}</td>
+        <td class="num">{{ '%.4f'|format(d.best.score) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% elif answer.hits %}
+<section class="section" aria-labelledby="hits-title">
+  <div class="section-head">
+    <div>
+      <h2 id="hits-title">{% if answer.generated %}Extraits transmis au modèle{% else %}Extraits retrouvés{% endif %}</h2>
+      <p>Dans l'ordre du classement.{% if answer.generated %} Les numéros en vert sont ceux cités dans la réponse.{% endif %}</p>
+    </div>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Réf.</th><th>Document</th><th class="num">Page</th><th class="num">Score</th></tr></thead>
+    <tbody>
+    {% for h in answer.hits %}
+      <tr>
+        <td><span class="cite {% if loop.index not in cited %}unused{% endif %}">{{ loop.index }}</span></td>
+        <td class="with-thumb">{{ thumb(thumb_url(h.source, h.doc_id, h.path, h.page, admin=True), "/admin/vignettes/" ~ h.source ~ "/" ~ (h.doc_id|urlencode) ~ "?page=" ~ h.page ~ "&l=480") }}<div><a class="path" href="/admin/documents?q={{ h.path|urlencode }}">{{ h.path }}</a>{% if h.doc_label %} <span class="sub" style="display: inline">· {{ h.doc_label }}</span>{% endif %}<p class="excerpt">{{ h.text|truncate(320 if answer.generated else 900) }}</p></div></td>
+        <td class="num">{{ h.page }}</td>
+        <td class="num">{{ '%.4f'|format(h.score) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% elif not groups %}
+<p class="hint">Aucun groupe renseigné : l'utilisateur ne voit aucun document. Ajoutez au moins un groupe.</p>
+{% else %}
+<p class="hint">Aucun extrait trouvé dans les documents accessibles à ces groupes.</p>
+{% endif %}
+{% endif %}

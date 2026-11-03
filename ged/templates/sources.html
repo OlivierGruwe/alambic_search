@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Sources{% endblock %}
+{% from "_macros.html" import help %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Sources</h1>
+    <p class="lede">Les référentiels indexés, leurs règles d'accès et l'historique des synchronisations. Les fichiers restent dans leur source : seul l'index est mis à jour.</p>
+  </div>
+  {% if can_edit %}
+  <div style="display: flex; gap: 10px; flex-wrap: wrap">
+    <a class="btn secondary" href="/admin/sources/export" title="Liste des sources au format sources.yaml : sauvegarde, versionnement, autre installation">Exporter (YAML)</a>
+    <a class="btn" href="/admin/sources/nouvelle">Ajouter une source</a>
+  </div>
+  {% endif %}
+</header>
+
+{% if imported %}<div class="test-box ok" style="margin-bottom: 20px">Importée{{ 's' if imported|length > 1 }} de sources.yaml : {{ imported|join(", ") }}. Lancez une synchronisation pour l'indexer.</div>{% endif %}
+{% if import_errors %}<div class="error-box" style="margin-bottom: 20px">Non importée{{ 's' if import_errors|length > 1 }} : {{ import_errors|join(" ; ") }}</div>{% endif %}
+{% if pending_yaml %}
+<section class="section notice">
+  <p><b>sources.yaml</b> déclare {{ pending_yaml|length }} source{{ 's' if pending_yaml|length > 1 }} absente{{ 's' if pending_yaml|length > 1 }} de la console : {{ pending_yaml|join(", ") }}.
+    Les sources se gèrent ici ; le fichier ne sert qu'à préparer une installation.</p>
+  <form method="post" action="/admin/sources/importer"><button class="btn secondary" type="submit">Importer</button></form>
+</section>
+{% endif %}
+{% if not sources %}
+<section class="section"><p class="empty">Aucune source pour l'instant.{% if can_edit %} <a href="/admin/sources/nouvelle">Ajouter la première</a> : un dossier partagé ou un partage Windows.{% endif %}</p></section>
+{% endif %}
+{% for s in sources %}
+<section class="section" id="src-{{ s.name }}" aria-labelledby="h-{{ s.name }}">
+  <div class="section-head">
+    <div>
+      <h2 id="h-{{ s.name }}">{{ s.name }}</h2>
+      <p>{{ s.info.type or "Source inaccessible" }}</p>
+    </div>
+    {% if s.editable %}
+    <div style="display: flex; gap: 10px">
+      <a class="btn secondary" href="/admin/sources/{{ s.name }}/modifier">Modifier</a>
+      <a class="btn secondary danger" href="/admin/sources/{{ s.name }}/supprimer">Supprimer</a>
+    </div>
+    {% endif %}
+  </div>
+  {% if s.error %}<div class="error-box" style="margin-bottom: 16px">Source inaccessible au démarrage : {{ s.error }}. Corrigez-la (Modifier), ou vérifiez que le partage est joignable puis redémarrez.</div>{% endif %}
+  {% if s.active %}
+  <dl class="source-meta">
+    <dt>Emplacement</dt><dd><span class="path">{{ s.info.location }}</span></dd>
+    {% if s.info.account %}<dt>Compte de service</dt><dd>{{ s.info.account }}</dd>{% endif %}
+    {% if s.info.acl_refresh %}<dt>Droits</dt><dd>ACL NTFS de chaque fichier, {{ s.info.acl_refresh }}</dd>{% endif %}
+    {% if light %}<dt>Alambic Light {{ help("h-light-" ~ s.name, "Type et données : chaque document est reconnu (facture, RIB…) et ses données extraites. Texte seul : texte intégral uniquement, Alambic Light ne lit que les scans (OCR seul). Se règle dans « Modifier ».") }}</dt><dd>{% if s.analyse %}Type et données{% else %}Texte seul (OCR des scans){% endif %}</dd>{% endif %}
+    <dt>Synchronisation {{ help("h-sync-" ~ s.name, "Automatique : la source est relue à intervalle régulier (nouveaux fichiers, modifications, droits, validations Alambic Light). Manuelle : seulement avec « Synchroniser maintenant » ou make sync.") }}</dt><dd>{% if s.every %}Automatique, toutes les {{ s.every|num }} min{% if s.next and not s.running %} (prochaine {{ s.next|when }}){% endif %}{% else %}Manuelle{% endif %}</dd>
+    {% if s.info.site_groups %}<dt>Groupes de site</dt><dd><ul class="rules">{% for sg, groups in s.info.site_groups.items() %}<li><span>{{ sg }}</span><span class="groups">{% for g in groups %}<span class="group">{{ g }}</span>{% endfor %}</span></li>{% endfor %}</ul></dd>{% endif %}
+    {% if s.info.unmapped %}<dt>À associer</dt><dd><div class="error-box" style="background: var(--amber-soft); color: #7a4a06">Groupes de site sans groupe AD associé : {{ s.info.unmapped|join(", ") }}. Les documents partagés seulement avec eux ne sont visibles par personne. À compléter dans « Modifier ».</div></dd>{% endif %}
+    {% if s.info.extensions %}<dt>Formats indexés</dt><dd>{{ s.info.extensions|join(", ") }}</dd>{% endif %}
+    <dt>Bureautique</dt><dd>{% if converter_url %}Convertie en PDF ({{ converter_url }}) : vraies pages, Word, Excel, PowerPoint et OpenDocument{% else %}.docx lu sans pagination (tout en page 1) ; conversion PDF non configurée (CONVERT_URL){% endif %}</dd>
+    <dt>Lecture</dt><dd>{% if light %}Alambic Light ({{ light.url }}) : OCR, type et données{% if light.envoi == "scans" %}, pour les documents sans texte{% else %}, pour les PDF et images{% endif %}{% if not light.ia %}, sans IA{% endif %}{% else %}Texte des fichiers seulement (Alambic Light non configuré : les scans restent « OCR requis »){% endif %}</dd>
+    {% if s.info.rules is defined %}
+    <dt>Droits par dossier</dt>
+    <dd>
+      {% if s.info.rules %}
+      <ul class="rules">
+        {% for folder, groups in s.info.rules.items() %}
+        <li><span class="path">{{ folder }}</span><span class="groups">{% for g in groups %}<span class="group">{{ g }}</span>{% endfor %}</span></li>
+        {% endfor %}
+      </ul>
+      <p class="hint">Un fichier sans règle applicable n'est visible par personne.</p>
+      {% else %}<span class="group none">Aucune règle : aucun document n'est visible</span>{% endif %}
+    </dd>
+    {% endif %}
+  </dl>
+  {% include "_source_runs.html" %}
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,10 @@
+{% if t.ok %}
+<div class="test-box ok">
+  <b>Source accessible</b> : {{ t.count|num }}{% if t.partial %}+{% endif %} fichier{{ 's' if t.count > 1 }} à indexer{% if t.partial %} (parcours arrêté là pour le test){% endif %}.
+  {% if t.sample %}<ul class="test-sample">{% for p in t.sample %}<li class="path">{{ p }}</li>{% endfor %}</ul>{% endif %}
+  {% if t.count == 0 %}<p class="hint">Aucun fichier dans un format indexé : vérifiez le dossier.</p>{% endif %}
+  {% if t.rules_empty %}<p class="hint"><b>Aucune règle de droits</b> : aucun utilisateur ne verra ces documents. Ajoutez au moins une ligne, par ex. <code>(racine) = direction</code>.</p>{% endif %}
+</div>
+{% else %}
+<div class="error-box">{{ t.error }}</div>
+{% endif %}

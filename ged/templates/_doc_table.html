@@ -1,0 +1,31 @@
+{% from "_macros.html" import acl_chips %}
+{% if rows %}
+<p class="hint" style="margin-bottom: 12px">{{ total|num }} document{{ 's' if total > 1 }}</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Chemin</th><th>Statut</th><th class="num">Extraits</th><th>Accès</th><th>Indexé</th></tr></thead>
+  <tbody>
+  {% for d in rows %}
+    <tr class="clickable" tabindex="0"
+        hx-get="/admin/documents/{{ d.source }}/{{ d.doc_id|urlencode }}" hx-target="#detail" hx-trigger="click, keyup[key=='Enter']"
+        onclick="document.querySelectorAll('tr[aria-selected]').forEach(r=>r.removeAttribute('aria-selected'));this.setAttribute('aria-selected','true')">
+      <td><span class="fname">{{ d.path|basename }}</span><span class="sub path">{{ d.path|dirname or "(racine)" }}</span><span class="sub">{{ d.source }}, {{ d.size|size }}</span></td>
+      <td><span class="status {{ DOC_STATUS[d.status][1] }}">{{ DOC_STATUS[d.status][0] }}</span>
+          {% if d.meta and d.meta.doc_type %}<span class="sub">{{ d.meta.label }}{% if d.meta.to_check %} · <span class="check">{{ d.meta.to_check|length }} à vérifier</span>{% endif %}</span>{% endif %}</td>
+      <td class="num">{{ d.chunks }}</td>
+      <td>{{ acl_chips(d.acl) }}</td>
+      <td class="nowrap">{{ d.indexed_at|when }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% if pages > 1 %}
+<nav class="pager" aria-label="Pagination">
+  {% set qs = "source=" ~ f.source ~ "&status=" ~ f.status ~ "&type=" ~ f.type ~ "&q=" ~ (f.q|urlencode) %}
+  {% if p > 1 %}<a href="/admin/documents?{{ qs }}&p={{ p - 1 }}" hx-get="/admin/documents?{{ qs }}&p={{ p - 1 }}" hx-target="#doc-results" hx-push-url="true">Page précédente</a>{% endif %}
+  <span>Page {{ p }} sur {{ pages }}</span>
+  {% if p < pages %}<a href="/admin/documents?{{ qs }}&p={{ p + 1 }}" hx-get="/admin/documents?{{ qs }}&p={{ p + 1 }}" hx-target="#doc-results" hx-push-url="true">Page suivante</a>{% endif %}
+</nav>
+{% endif %}
+{% else %}
+<p class="empty">Aucun document ne correspond à ces filtres.</p>
+{% endif %}

@@ -1,0 +1,165 @@
+/* Alambic UI — charte commune d'Alambic Search et d'Alambic Light.
+ *
+ * Un seul fichier, aucune ressource externe (polices dans fonts/, à côté).
+ * Préfixe al- : ne gêne pas les styles propres à chaque application.
+ *
+ *   <link rel="stylesheet" href="…/alambic-ui/alambic.css">
+ *   <body class="al-app"> … bandeau (bandeau.html), puis <div class="al-shell">
+ *     <nav class="al-nav">…</nav> <main class="al-main">…</main> </div>
+ *
+ * Polices : IBM Plex (OFL), Comfortaa (OFL) pour la marque seulement.
+ */
+
+@font-face { font-family: "Plex Sans"; src: url("fonts/plex-sans-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Plex Sans"; src: url("fonts/plex-sans-500.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Plex Sans"; src: url("fonts/plex-sans-600.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Plex Mono"; src: url("fonts/plex-mono-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Comfortaa"; src: url("fonts/comfortaa-500.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Comfortaa"; src: url("fonts/comfortaa-700.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+
+:root {
+  /* Marque */
+  --al-ink: #10223F;            /* bandeau, titres */
+  --al-ink-2: #1C3354;          /* surfaces sur le bandeau */
+  --al-ink-line: #2E4468;       /* traits sur le bandeau */
+  --al-on-ink: #DCE4F0;         /* texte sur le bandeau */
+  --al-on-ink-2: #8EA0BC;
+  --al-accent: #A9561F;         /* cuivre : actions, élément actif (5,2:1 sur blanc) */
+  --al-accent-hover: #8E4718;
+  --al-accent-soft: #F7EBE2;
+  --al-accent-on-ink: #E8A272;  /* nom du produit dans le bandeau */
+  /* Neutres */
+  --al-ground: #F4F6F9;
+  --al-surface: #FFFFFF;
+  --al-line: #DCE2EA;
+  --al-line-2: #C3CCD8;
+  --al-text: #172033;
+  --al-text-2: #4A5872;         /* 7:1 sur blanc */
+  --al-text-3: #5B6880;         /* rubriques de menu (5,9:1) */
+  --al-link: #1F3A66;
+  /* Statuts : couleur ET intensité différentes */
+  --al-ok: #155E57;     --al-ok-soft: #E2F1EE;
+  --al-warn: #7A4B00;   --al-warn-soft: #FFF1D6;   --al-warn-line: #B07000;
+  --al-bad: #A61F14;    --al-bad-soft: #FDECEB;
+  --al-info: #1F3A66;   --al-info-soft: #E8EDF5;
+  --al-muted: #4A5872;  --al-muted-soft: #EEF0F3;
+  /* Formes */
+  --al-radius: 6px;
+  --al-radius-lg: 8px;
+  --al-sans: "Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --al-mono: "Plex Mono", ui-monospace, Consolas, monospace;
+  --al-brand: "Comfortaa", var(--al-sans);
+  --al-bar-h: 56px;
+}
+
+.al-app { margin: 0; font-family: var(--al-sans); color: var(--al-text); background: var(--al-ground);
+  line-height: 1.5; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+.al-app *, .al-app *::before, .al-app *::after { box-sizing: border-box; }
+
+/* --- Bandeau ------------------------------------------------------------------------ */
+
+.al-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; min-height: var(--al-bar-h);
+  padding: 0 24px; background: var(--al-ink); color: #fff; position: relative; z-index: 30; }
+.al-brand { display: flex; align-items: center; gap: 10px; color: #fff; text-decoration: none; white-space: nowrap; }
+.al-brand:hover { text-decoration: none; color: #fff; }
+.al-brand svg { width: 30px; height: 24px; flex: none; }
+.al-wordmark { font-family: var(--al-brand); font-size: 19px; letter-spacing: .2px; }
+.al-wordmark b { font-weight: 700; }
+.al-wordmark span { font-weight: 500; color: var(--al-accent-on-ink); }
+.al-bar-fill { flex: 1 1 0; min-width: 0; }
+.al-chip-ink { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 14px;
+  background: var(--al-ink-2); color: #C9D5E6; font-size: 13px; white-space: nowrap; }
+.al-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
+  border-radius: 18px; border: 1px solid var(--al-ink-line); color: var(--al-on-ink); font-weight: 600;
+  text-decoration: none; background: transparent; }
+.al-icon-btn:hover { background: var(--al-ink-2); color: #fff; text-decoration: none; }
+
+/* Menus déroulants du bandeau : <details class="al-menu"><summary>…</summary><div class="al-pop">…</div></details>
+   (fonctionnent sans JavaScript ; alambic.js les ferme au clic extérieur et sur Échap) */
+.al-menu { position: relative; }
+.al-menu > summary { list-style: none; cursor: pointer; }
+.al-menu > summary::-webkit-details-marker { display: none; }
+.al-apps-btn { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid var(--al-ink-line);
+  border-radius: var(--al-radius); color: var(--al-on-ink); font-weight: 500; font-size: 14px; }
+.al-apps-btn:hover, .al-menu[open] > .al-apps-btn { background: var(--al-ink-2); color: #fff; }
+.al-apps-btn svg, .al-user-btn svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.al-user-btn { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 6px 0 4px; border-radius: 20px;
+  color: #fff; font-weight: 500; font-size: 14px; }
+.al-user-btn:hover, .al-menu[open] > .al-user-btn { background: var(--al-ink-2); }
+.al-avatar { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 16px;
+  background: var(--al-accent); color: #fff; font-size: 13px; font-weight: 600; flex: none; }
+.al-pop { position: absolute; top: calc(100% + 8px); left: 0; width: 340px; max-width: calc(100vw - 32px); padding: 8px;
+  background: var(--al-surface); color: var(--al-text); border: 1px solid var(--al-line); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(16, 34, 63, .16); }
+.al-pop.al-right { left: auto; right: 0; width: 260px; }
+.al-pop-group { margin: 10px 12px 6px; font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--al-text-3); }
+.al-pop-group:first-child { margin-top: 6px; }
+.al-pop a, .al-pop button { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 10px 12px; border-radius: var(--al-radius);
+  color: var(--al-text); text-decoration: none; background: none; border: 0; font: inherit; text-align: left; cursor: pointer; }
+.al-pop a:hover, .al-pop button:hover { background: var(--al-ground); text-decoration: none; color: var(--al-text); }
+.al-pop a[aria-current="page"] { background: var(--al-accent-soft); }
+.al-pop strong { font-weight: 600; }
+.al-pop small { font-size: 13px; color: var(--al-text-2); }
+.al-pop form { margin: 0; }
+.al-pop hr { border: 0; border-top: 1px solid var(--al-line); margin: 6px 4px; }
+
+/* --- Structure : menu latéral + contenu ----------------------------------------------- */
+
+.al-shell { display: flex; flex-wrap: wrap; align-items: stretch; min-height: calc(100vh - var(--al-bar-h)); }
+.al-nav { flex: 1 1 232px; max-width: 260px; padding: 20px 12px; background: var(--al-surface);
+  border-right: 1px solid var(--al-line); display: flex; flex-direction: column; gap: 2px; }
+.al-nav-group { margin: 16px 12px 8px; font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--al-text-3); }
+.al-nav-group:first-child { margin-top: 4px; }
+.al-nav a { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border-radius: var(--al-radius);
+  color: #2B3850; font-weight: 500; text-decoration: none; }
+.al-nav a svg { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.7; }
+.al-nav a:hover { background: var(--al-ground); color: var(--al-text); text-decoration: none; }
+.al-nav a[aria-current="page"] { background: var(--al-accent-soft); color: var(--al-accent); font-weight: 600; }
+.al-nav-count { margin-left: auto; display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px;
+  background: var(--al-accent); color: #fff; font-size: 12px; font-weight: 600; }
+.al-nav-foot { margin-top: auto; padding: 16px 12px 0; font-size: 12px; color: var(--al-text-3); }
+.al-main { flex: 999 1 560px; min-width: 0; padding: 32px 40px 64px; }
+@media (max-width: 720px) {
+  .al-bar { padding: 8px 16px; }
+  .al-nav { max-width: none; border-right: 0; border-bottom: 1px solid var(--al-line); flex-direction: row; flex-wrap: wrap; }
+  .al-nav-group, .al-nav-foot { display: none; }
+  .al-main { padding: 24px 16px 48px; }
+}
+
+/* --- Composants ----------------------------------------------------------------------- */
+
+.al-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px;
+  border: 1px solid var(--al-accent); border-radius: var(--al-radius); background: var(--al-accent); color: #fff;
+  font: 600 15px var(--al-sans); cursor: pointer; text-decoration: none; }
+.al-btn:hover { background: var(--al-accent-hover); border-color: var(--al-accent-hover); color: #fff; text-decoration: none; }
+.al-btn.al-secondary { background: var(--al-surface); color: var(--al-text); border-color: var(--al-line-2); font-weight: 500; }
+.al-btn.al-secondary:hover { background: var(--al-ground); }
+.al-btn.al-danger { background: var(--al-surface); color: var(--al-bad); border-color: var(--al-line-2); font-weight: 500; }
+.al-btn.al-danger:hover { background: var(--al-bad-soft); }
+.al-btn[disabled] { opacity: .55; cursor: progress; }
+
+.al-badge { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 10px; border-radius: 13px;
+  font-size: 13px; font-weight: 600; white-space: nowrap; }
+.al-badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.al-badge.al-ok { background: var(--al-ok-soft); color: var(--al-ok); }
+.al-badge.al-warn { background: var(--al-warn-soft); color: var(--al-warn); }
+.al-badge.al-warn::before { background: var(--al-warn-line); }
+.al-badge.al-bad { background: var(--al-bad-soft); color: var(--al-bad); }
+.al-badge.al-info { background: var(--al-info-soft); color: var(--al-info); }
+.al-badge.al-muted { background: var(--al-muted-soft); color: var(--al-muted); }
+
+/* Aide contextuelle : <span class="al-help"><button class="al-help-btn" aria-describedby="x">?</button>
+   <span role="tooltip" id="x" class="al-help-tip">…</span></span> */
+.al-help { position: relative; display: inline-flex; }
+.al-help-btn { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--al-line-2); background: var(--al-surface);
+  color: var(--al-text-2); font: 600 11px/1 var(--al-sans); cursor: help; padding: 0; display: inline-grid; place-items: center; }
+.al-help-btn:hover, .al-help-btn:focus-visible { border-color: var(--al-accent); color: var(--al-accent); }
+.al-help-tip { position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%); z-index: 40;
+  width: max-content; max-width: min(340px, 80vw); padding: 10px 12px; border-radius: 8px; background: var(--al-ink);
+  color: #EEF3FA; font-size: 13px; font-weight: 400; line-height: 1.5; box-shadow: 0 6px 20px rgba(16, 34, 63, .25);
+  visibility: hidden; opacity: 0; transition: opacity .12s; pointer-events: none; text-align: left; white-space: normal; }
+.al-help:hover .al-help-tip, .al-help:focus-within .al-help-tip { visibility: visible; opacity: 1; }
+
+.al-app :focus-visible { outline: 2px solid var(--al-accent); outline-offset: 2px; }
+.al-bar :focus-visible { outline-color: var(--al-accent-on-ink); }
+@media (prefers-reduced-motion: reduce) { .al-help-tip { transition: none; } }

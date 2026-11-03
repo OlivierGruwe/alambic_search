@@ -1,0 +1,55 @@
+<!-- Bandeau commun Alambic : à reprendre tel quel dans chaque page (Alambic Light : product = light).
+     Remplacer les {{ … }} par les valeurs de la session (rôles Keycloak) et de la configuration.
+     Les menus sont des <details> : ils marchent sans JavaScript ; alambic.js les ferme au clic extérieur et sur Échap. -->
+<header class="al-bar">
+  <a class="al-brand" href="/" aria-label="Alambic Light, accueil">
+    <svg viewBox="70 -6 300 236" aria-hidden="true"><defs><mask id="al-cut" maskUnits="userSpaceOnUse" x="60" y="-10" width="320" height="250"><rect x="60" y="-10" width="320" height="250" fill="#fff"/><line x1="170" y1="151" x2="100" y2="167.5" stroke="#000" stroke-width="2.8"/></mask></defs><g mask="url(#al-cut)" fill="currentColor" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon stroke-width="5" points="78.9,223 196,2 245,2 362.1,223 316.1,223 220.5,47 124.9,223"/><line stroke-width="12" x1="193" y1="153.5" x2="239" y2="153.5"/><line stroke-width="12" x1="193" y1="183.5" x2="256" y2="183.5"/><line stroke-width="12" x1="193" y1="213.5" x2="239" y2="213.5"/></g></svg>
+    <span class="al-wordmark"><b>alambic</b> <span>light</span></span>
+  </a>
+  <details class="al-menu">
+    <summary class="al-apps-btn" aria-label="Applications Alambic">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>
+      Applications
+    </summary>
+    <div class="al-pop">
+      <a href="{{ SEARCH_URL }}/"><strong>Portail</strong><small>Toutes vos applications Alambic</small></a>
+      <hr>
+      <p class="al-pop-group">Alambic Search</p>
+      <a href="{{ SEARCH_URL }}/rechercher"><strong>Rechercher</strong><small>Questions et listes de documents</small></a>
+      <!-- seulement avec le rôle alambic-search:admin -->
+      <a href="{{ SEARCH_URL }}/admin"><strong>Administration</strong><small>Sources, documents, bac à sable</small></a>
+      <p class="al-pop-group">Alambic Light</p>
+      <!-- selon les rôles alambic-light:* ; aria-current="page" sur la page en cours -->
+      <a href="/validation" aria-current="page"><strong>Validation</strong><small>Données extraites à contrôler</small></a>
+      <a href="/ui/types"><strong>Types de documents</strong><small>Référentiel, champs, essais</small></a>
+      <a href="/ui"><strong>Tableau de bord</strong><small>Volumes, coûts, précision</small></a>
+    </div>
+  </details>
+  <div class="al-bar-fill"></div>
+  <span class="al-chip-ink" title="Client">{{ nom du client }}</span>
+  <a class="al-icon-btn" href="/documentation" aria-label="Aide">?</a>
+  <details class="al-menu">
+    <summary class="al-user-btn" aria-label="Compte de {{ nom }}">
+      <span class="al-avatar" aria-hidden="true">{{ initiales }}</span>
+      <span>{{ nom }}</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </summary>
+    <div class="al-pop al-right">
+      <p class="al-pop-group">{{ identifiant }}</p>
+      <form method="post" action="/deconnexion"><button type="submit"><strong>Se déconnecter</strong><small>Ferme la session dans toutes les applications</small></button></form>
+    </div>
+  </details>
+</header>
+
+<!-- Puis le menu propre à l'application et le contenu : -->
+<div class="al-shell">
+  <nav class="al-nav" aria-label="Menu d'Alambic Light">
+    <p class="al-nav-group">Traitement</p>
+    <a href="/validation" aria-current="page">Validation <span class="al-nav-count">12</span></a>
+    <a href="/ui">Tableau de bord</a>
+    <p class="al-nav-group">Paramétrage</p>
+    <a href="/ui/types">Types de documents</a>
+    <a href="/maintain">Exploitation</a>
+  </nav>
+  <main class="al-main"> … </main>
+</div>

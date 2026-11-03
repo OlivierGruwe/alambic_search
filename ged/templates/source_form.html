@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% from "_macros.html" import label, help %}
+{% macro secret_field(kind, prefix, title, what, env_name, env_value, env_placeholder) -%}
+  <div class="field wide" data-kind="{{ kind }}">
+    {% set saved = stored and v.type in kind.split(' ') %}
+    {{ label("s-" ~ prefix ~ "-secret", title, ("Saisi ici, " ~ what ~ " est chiffré (AES-256) avant d'être enregistré en base ; la clé (SECRETS_KEY) reste hors de la base. Il n'est jamais réaffiché. " if can_store else "") ~ "Autre possibilité : le laisser dans .env et indiquer le nom de la variable (prioritaire si les deux sont renseignés).") }}
+    {% if can_store %}
+    <input id="s-{{ prefix }}-secret" name="{{ prefix }}_secret" type="password" autocomplete="new-password"
+           placeholder="{{ '•••••••• enregistré — laisser vide pour le garder' if saved else 'saisir ' ~ what }}">
+    {% if saved %}<label class="check-label hint"><input type="checkbox" name="{{ prefix }}_secret_clear" value="true"> Effacer {{ what }} enregistré</label>{% endif %}
+    {% else %}
+    <p class="hint">Saisie dans la console désactivée : définissez SECRETS_KEY (<code>make secrets-key</code>) pour chiffrer {{ what }} en base. En attendant, indiquez la variable d'environnement.</p>
+    {% endif %}
+    <details class="env-alt" {% if env_value or not can_store %}open{% endif %}>
+      <summary class="hint">Ou : variable d'environnement</summary>
+      <input name="{{ env_name }}" value="{{ env_value or '' }}" placeholder="{{ env_placeholder }}" autocomplete="off" aria-label="Variable d'environnement contenant {{ what }}">
+    </details>
+  </div>
+{%- endmacro %}
+{% block title %}{% if editing %}Modifier {{ editing }}{% else %}Nouvelle source{% endif %}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="sub"><a href="/admin/sources">Sources</a></p>
+    <h1>{% if editing %}Modifier « {{ editing }} »{% else %}Ajouter une source{% endif %}</h1>
+    <p class="lede">Les fichiers restent dans la source : seul leur texte est indexé, avec les droits d'accès.
+      {% if editing %}Les documents qui ne sont plus dans la source seront retirés de l'index à la synchronisation suivante.{% endif %}</p>
+  </div>
+</header>
+
+{% if error %}<div class="error-box" role="alert" style="margin-bottom: 20px">{{ error }}</div>{% endif %}
+
+<form class="section sandbox-form" method="post" id="src-form"
+      action="{% if editing %}/admin/sources/{{ editing }}/modifier{% else %}/admin/sources/nouvelle{% endif %}">
+
+  {# --- Commun --- #}
+  <div class="field">{{ label("s-name", "Nom", "Identifiant court de la source : minuscules, chiffres, - et _ (ex. partage-compta). Il sert dans l'index, les liens vers les documents et les commandes (make sync SOURCE=…). Il ne se modifie plus ensuite.") }}
+    <input id="s-name" name="name" value="{{ v.name or '' }}" required pattern="[a-z0-9][a-z0-9_\-]*" maxlength="63"
+           placeholder="ex. partage-compta" {% if editing %}readonly{% endif %} autocomplete="off"></div>
+  <div class="field">{{ label("s-type", "Type", "Où sont les documents. Dossier : disque du serveur ou partage déjà monté. Partage Windows : lu directement en SMB, avec les vrais droits NTFS. FTP et S3 : droits définis ici, dossier par dossier. Alfresco, GED CMIS, SharePoint : lus par leur API, avec leurs propres droits.") }}
+    <select id="s-type" name="type" {% if editing %}disabled{% endif %}>
+      {% for code, text in [("filesystem", "Dossier (local ou monté)"), ("smb", "Partage Windows (SMB)"), ("ftp", "Serveur FTP / FTPS"), ("s3", "Stockage S3 (Amazon, MinIO, Garage…)"), ("alfresco", "Alfresco"), ("cmis", "GED CMIS (Nuxeo, OpenText…)"), ("sharepoint", "SharePoint / OneDrive")] %}
+      <option value="{{ code }}" {% if v.type == code %}selected{% endif %}>{{ text }}</option>
+      {% endfor %}
+    </select>
+    {% if editing %}<input type="hidden" name="type" value="{{ v.type }}">{% endif %}</div>
+  <div class="field">{{ label("s-min", "Synchronisation automatique", "Toutes les combien de minutes la source est relue (nouveaux fichiers, modifications, droits, validations Alambic Light). 5 minutes au moins. Une synchro où rien n'a changé est rapide. Vide : seulement quand on clique « Synchroniser ».") }}
+    <input id="s-min" name="synchro_minutes" type="number" min="5" step="1" value="{{ (v.synchro_minutes|int) if v.synchro_minutes else '' }}" placeholder="manuelle"></div>
+
+  <div class="field wide">
+    <input type="hidden" name="analyse_light_field" value="1">
+    <div class="label-row"><label class="check-label"><input type="checkbox" name="analyse_light" value="true" {% if v.analyse_light is not defined or v.analyse_light %}checked{% endif %}> Type et données (Alambic Light)</label>{{ help("h-analyse", "Coché : Alambic Light reconnaît le type de chaque document (facture, RIB…) et en extrait les données, interrogeables et filtrables (« toutes les factures de M. GRUWE »). Décoché : texte intégral seulement ; Alambic Light ne sert qu'à lire les scans (OCR seul), sans reconnaissance ni données à valider. Décocher retire, à la synchro suivante, les types et données déjà extraits ; recocher fait analyser les documents qui ne l'ont pas été.") }}</div>
+    {% if not light %}<p class="hint">Alambic Light n'est pas configuré : texte intégral seulement pour toutes les sources, scans compris (« OCR requis »).</p>{% endif %}
+  </div>
+
+  {# --- Dossier --- #}
+  <p class="kind-intro" data-kind="filesystem">Les droits ne viennent pas des fichiers : ils sont définis ci-dessous, dossier par dossier.</p>
+  <p class="kind-intro" data-kind="ftp">FTP ne dit pas qui, dans l'entreprise, peut lire quoi : les droits sont définis ci-dessous, dossier par dossier. Le serveur doit connaître la commande MLSD (tous les serveurs récents).</p>
+  <p class="kind-intro" data-kind="s3">Amazon S3 ou stockage compatible (MinIO, Garage, OVH, Scaleway, Ceph…). Les droits S3 (IAM, politiques de bucket) ne disent pas qui, dans l'entreprise, peut lire quoi : ils sont définis ci-dessous, préfixe par préfixe.</p>
+
+  {# --- FTP --- #}
+  <div class="field" data-kind="ftp">{{ label("s-fhost", "Serveur", "Nom ou adresse du serveur FTP, sans ftp:// (ex. ftp.corp.local).") }}
+    <input id="s-fhost" name="host" value="{{ v.host or '' }}" placeholder="ex. ftp.corp.local" autocomplete="off"></div>
+  <div class="field" data-kind="ftp">{{ label("s-fport", "Port", "21 en général, y compris en FTPS explicite.") }}
+    <input id="s-fport" name="ftp_port" type="number" value="{{ v.port if v.type == 'ftp' else 21 }}" style="width: 120px"></div>
+  <div class="field" data-kind="ftp">{{ label("s-froot", "Dossier de départ", "Dossier du serveur à indexer, ex. /Echanges/Compta. Vide : tout ce que voit le compte.") }}
+    <input id="s-froot" name="ftp_root" value="{{ v.root if v.type == 'ftp' else '' }}" placeholder="ex. /Echanges" autocomplete="off"></div>
+  <div class="field" data-kind="ftp">{{ label("s-fuser", "Compte", "Compte FTP en lecture seule. Vide : connexion anonyme.") }}
+    <input id="s-fuser" name="ftp_username" value="{{ v.username if v.type == 'ftp' else '' }}" placeholder="ex. svc-alambic" autocomplete="off"></div>
+  {{ secret_field("ftp", "ftp", "Mot de passe", "le mot de passe", "ftp_password_env", v.password_env if v.type == 'ftp' else '', "ex. FTP_PASSWORD") }}
+  <div class="field" data-kind="ftp">
+    <div class="label-row"><label class="check-label"><input type="checkbox" name="tls" value="true" {% if v.tls is not defined or v.tls %}checked{% endif %}> FTPS (chiffré)</label>{{ help("h-tls", "Chiffre la connexion (AUTH TLS). Sans chiffrement, le mot de passe et les documents circulent en clair sur le réseau : à réserver à un réseau isolé.") }}</div></div>
+
+  {# --- S3 --- #}
+  <div class="field" data-kind="s3">{{ label("s-bucket", "Bucket", "Nom du bucket (ex. archives-compta).") }}
+    <input id="s-bucket" name="bucket" value="{{ v.bucket or '' }}" placeholder="ex. archives-compta" autocomplete="off"></div>
+  <div class="field" data-kind="s3">{{ label("s-prefix", "Préfixe", "Facultatif : n'indexer qu'une partie du bucket (ex. ged/2026). Les « dossiers » S3 sont des préfixes de clés.") }}
+    <input id="s-prefix" name="prefix" value="{{ v.prefix or '' }}" placeholder="facultatif" autocomplete="off"></div>
+  <div class="field" data-kind="s3">{{ label("s-region", "Région", "Région du bucket (ex. eu-west-3 pour Paris chez Amazon, fr-par chez Scaleway, garage pour Garage). Vide : région par défaut.") }}
+    <input id="s-region" name="region" value="{{ v.region or '' }}" placeholder="ex. eu-west-3" autocomplete="off"></div>
+  <div class="field wide" data-kind="s3">{{ label("s-endpoint", "Adresse du service", "Vide pour Amazon S3. Pour un stockage compatible : son adresse, ex. https://s3.fr-par.scw.cloud, https://minio.corp.local:9000 ou http://garage:3900.") }}
+    <input id="s-endpoint" name="endpoint_url" value="{{ v.endpoint_url or '' }}" placeholder="vide = Amazon S3" autocomplete="off"></div>
+  <div class="field" data-kind="s3">{{ label("s-akid", "Clé d'accès", "Identifiant de la clé (Access Key ID), avec seulement les droits s3:ListBucket et s3:GetObject sur ce bucket. Vide : identité de l'environnement (rôle IAM du serveur).") }}
+    <input id="s-akid" name="access_key_id" value="{{ v.access_key_id or '' }}" placeholder="ex. AKIA… ou GK…" autocomplete="off"></div>
+  {{ secret_field("s3", "s3", "Secret de la clé", "le secret", "secret_access_key_env", v.secret_access_key_env, "ex. S3_SECRET") }}
+  <div class="field" data-kind="s3">
+    <div class="label-row"><label class="check-label"><input type="checkbox" name="path_style" value="true" {% if v.path_style %}checked{% endif %}> Adressage par chemin</label>{{ help("h-path", "Adresse le bucket dans le chemin (serveur/bucket/clé) plutôt que dans le nom d'hôte. Nécessaire pour MinIO et Garage ; coché d'office quand une adresse de service est indiquée.") }}</div></div>
+  <div class="field wide" data-kind="filesystem">{{ label("s-root", "Dossier racine", ("L'API tourne dans Docker : seul le dossier monté est visible, sous /data/partage (c'est DOCUMENTS_DIR de .env). Ex. /data/partage/Compta." if in_docker else "Chemin sur le serveur de l'API, avec des / (ex. D:/documents/Compta). ${VARIABLE} est remplacé par la variable d'environnement (ex. ${DOCUMENTS_DIR}/Compta).")) }}
+    <input id="s-root" name="root" value="{{ v.root or '' }}" placeholder="{{ '/data/partage/Compta' if in_docker else 'ex. D:/documents/Compta ou ${DOCUMENTS_DIR}/Compta' }}" autocomplete="off"></div>
+  <div class="field wide" data-kind="filesystem ftp s3">{{ label("s-acl", "Droits par dossier", "Une ligne par dossier : dossier = groupe1, groupe2. « (racine) » désigne le dossier racine. Le dossier le plus précis l'emporte : Compta/Paie = rh s'applique à la place de Compta = compta. Un fichier sans règle n'est visible par personne. Les groupes sont ceux de l'annuaire (noms AD) ou de la section identity.") }}
+    <textarea id="s-acl" name="acl" rows="5" placeholder="(racine) = direction&#10;Compta = compta, direction&#10;Public = tous">{{ v.acl_text }}</textarea></div>
+
+  {# --- SMB --- #}
+  <p class="kind-intro" data-kind="smb">Les droits sont les ACL NTFS de chaque fichier, traduites en SID : l'utilisateur voit exactement ce que Windows l'autorise à ouvrir.</p>
+  <div class="field" data-kind="smb">{{ label("s-server", "Serveur", "Nom ou adresse du serveur de fichiers, sans \\\\ (ex. fichiers.corp.local).") }}
+    <input id="s-server" name="server" value="{{ v.server or '' }}" placeholder="ex. fichiers.corp.local" autocomplete="off"></div>
+  <div class="field" data-kind="smb">{{ label("s-share", "Partage", "Nom du partage tel qu'il apparaît dans \\\\serveur\\partage (ex. Commun).") }}
+    <input id="s-share" name="share" value="{{ v.share or '' }}" placeholder="ex. Commun" autocomplete="off"></div>
+  <div class="field" data-kind="smb">{{ label("s-path", "Sous-dossier", "Facultatif : n'indexer qu'une partie du partage (ex. Compta/2026).") }}
+    <input id="s-path" name="path" value="{{ v.path or '' }}" placeholder="facultatif" autocomplete="off"></div>
+  <div class="field" data-kind="smb">{{ label("s-user", "Compte de service", "Compte dédié, en lecture seule : droits « Lire » et « Lire les autorisations » sur le partage. Ex. CORP\\svc-alambic.") }}
+    <input id="s-user" name="username" value="{{ v.username or '' }}" placeholder="ex. CORP\svc-alambic" autocomplete="off"></div>
+  {{ secret_field("smb", "smb", "Mot de passe", "le mot de passe", "password_env", v.password_env, "ex. SMB_PASSWORD") }}
+  <div class="field" data-kind="smb">{{ label("s-port", "Port", "445 en général. À changer seulement si le serveur écoute ailleurs.") }}
+    <input id="s-port" name="port" type="number" value="{{ v.port or 445 }}" style="width: 120px"></div>
+  <div class="field" data-kind="smb">
+    <div class="label-row"><label class="check-label"><input type="checkbox" name="encrypt" value="true" {% if v.encrypt %}checked{% endif %}> Chiffrement SMB3</label>{{ help("h-encrypt", "Chiffre les échanges avec le serveur. Recommandé ; à décocher seulement si le serveur ne le permet pas (anciens NAS).") }}</div></div>
+
+  {# --- Alfresco / CMIS --- #}
+  <p class="kind-intro" data-kind="alfresco">Lu par l'API REST d'Alfresco. Les droits sont ceux d'Alfresco (hérités et posés, refus compris) ; les groupes Alfresco synchronisés depuis l'AD (GROUP_Compta) correspondent aux groupes AD du même nom.</p>
+  <p class="kind-intro" data-kind="cmis">Standard des GED (Alfresco, Nuxeo, OpenText, Documentum…), en « browser binding » CMIS 1.1. Les droits sont les ACL CMIS de chaque document ; les groupes de la GED doivent porter les mêmes noms que dans l'AD.</p>
+  <div class="field wide" data-kind="alfresco cmis">{{ label("s-url", "Adresse", "Alfresco : adresse du serveur, ex. https://ged.corp.local (sans /alfresco/api…). CMIS : adresse du « browser binding », ex. https://ged.corp.local/alfresco/api/-default-/public/cmis/versions/1.1/browser, ou https://nuxeo.corp.local/nuxeo/json/cmis pour Nuxeo.") }}
+    <input id="s-url" name="url" value="{{ v.url or '' }}" placeholder="https://ged.corp.local" autocomplete="off"></div>
+  <div class="field" data-kind="cmis">{{ label("s-repo", "Dépôt", "Identifiant du dépôt CMIS. Vide : le premier dépôt du serveur (souvent le seul). « Tester l'accès » liste les dépôts disponibles en cas d'erreur.") }}
+    <input id="s-repo" name="repository" value="{{ v.repository or '' }}" placeholder="facultatif" autocomplete="off"></div>
+  <div class="field" data-kind="alfresco cmis">{{ label("s-root2", "Dossier de départ", "Chemin du dossier à indexer, depuis la racine de la GED. Alfresco : ex. Sites/compta/documentLibrary pour la bibliothèque du site « compta ». Vide : toute la GED (déconseillé).") }}
+    <input id="s-root2" name="ged_root" value="{{ v.root if v.type in ('alfresco', 'cmis') else '' }}" placeholder="ex. Sites/compta/documentLibrary" autocomplete="off"></div>
+  <div class="field" data-kind="alfresco cmis">{{ label("s-guser", "Compte de service", "Compte en lecture seule (rôle « Consommateur » dans Alfresco) qui doit aussi pouvoir lire les permissions des documents.") }}
+    <input id="s-guser" name="ged_username" value="{{ v.username if v.type in ('alfresco', 'cmis') else '' }}" placeholder="ex. svc-alambic" autocomplete="off"></div>
+  {{ secret_field("alfresco cmis", "ged", "Mot de passe", "le mot de passe", "ged_password_env", v.password_env if v.type in ('alfresco', 'cmis') else '', "ex. ALFRESCO_PASSWORD") }}
+
+  {# --- SharePoint --- #}
+  <p class="kind-intro" data-kind="sharepoint">Lu par Microsoft Graph avec une application Entra ID. Les utilisateurs et groupes synchronisés depuis l'AD sont reconnus par leur SID ; les groupes de site SharePoint doivent être associés à des groupes AD ci-dessous.</p>
+  <div class="field wide" data-kind="sharepoint">{{ label("s-site", "Adresse du site", "Adresse du site telle qu'elle apparaît dans le navigateur, sans la bibliothèque : ex. https://contoso.sharepoint.com/sites/Finances.") }}
+    <input id="s-site" name="site_url" value="{{ v.site_url or '' }}" placeholder="https://contoso.sharepoint.com/sites/Finances" autocomplete="off"></div>
+  <div class="field" data-kind="sharepoint">{{ label("s-lib", "Bibliothèque", "Nom de la bibliothèque de documents. « Documents » (ou « Documents partagés ») est celle par défaut. En cas d'erreur, « Tester l'accès » liste celles du site.") }}
+    <input id="s-lib" name="library" value="{{ v.library or 'Documents' }}" autocomplete="off"></div>
+  <div class="field" data-kind="sharepoint">{{ label("s-folder", "Dossier", "Facultatif : n'indexer qu'un dossier de la bibliothèque (ex. Factures/2026).") }}
+    <input id="s-folder" name="folder" value="{{ v.folder or '' }}" placeholder="facultatif" autocomplete="off"></div>
+  <div class="field" data-kind="sharepoint">{{ label("s-tenant", "Tenant (annuaire Entra)", "Identifiant de l'annuaire Microsoft 365 (GUID, ou contoso.onmicrosoft.com). Portail Entra → Vue d'ensemble → ID du locataire.") }}
+    <input id="s-tenant" name="tenant_id" value="{{ v.tenant_id or '' }}" placeholder="ex. 0f1e…-…" autocomplete="off"></div>
+  <div class="field" data-kind="sharepoint">{{ label("s-client", "Application (client ID)", "Application à déclarer dans Entra ID (Inscriptions d'applications), avec les permissions d'application Sites.Read.All (ou Sites.Selected limitée à ce site), User.Read.All et GroupMember.Read.All, consentement administrateur accordé.") }}
+    <input id="s-client" name="client_id" value="{{ v.client_id or '' }}" placeholder="ex. 7c4b…-…" autocomplete="off"></div>
+  {{ secret_field("sharepoint", "sp", "Secret de l'application", "le secret", "client_secret_env", v.client_secret_env, "ex. SHAREPOINT_SECRET") }}
+  <div class="field wide" data-kind="sharepoint">{{ label("s-sg", "Groupes de site → groupes AD", "SharePoint donne souvent les droits à ses propres groupes (« Membres de Finances », « Visiteurs de Finances »…), que l'AD ne connaît pas. Indiquez, une ligne par groupe de site, les groupes AD qui en font partie : Membres de Finances = finance, direction. Un groupe de site sans correspondance ne donne accès à personne ; la page Sources liste ceux rencontrés.") }}
+    <textarea id="s-sg" name="site_groups" rows="4" placeholder="Membres de Finances = finance&#10;Visiteurs de Finances = finance, direction">{{ v.site_groups_text }}</textarea></div>
+
+  {# --- Droits relus (API et SMB) --- #}
+  <div class="field" data-kind="smb alfresco cmis sharepoint">{{ label("s-refresh", "Relecture des droits (heures)", "Les droits d'un document modifié sont relus à chaque synchro. Un changement de droits seul ne modifie pas toujours le document : ils sont donc aussi relus au moins toutes les N heures. « Relire tous les droits », sur la page Sources, force une relecture immédiate.") }}
+    <input id="s-refresh" name="acl_refresh_hours" type="number" min="1" value="{{ v.acl_refresh_hours or 24 }}" style="width: 120px"></div>
+
+  <div class="wide" id="test-result" aria-live="polite"></div>
+  <div class="wide" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+    <button class="btn secondary" type="button" hx-post="/admin/sources/tester" hx-include="#src-form"
+            hx-target="#test-result" hx-indicator="#test-wait"
+            title="Se connecte et parcourt la source (2 000 fichiers ou 10 s au plus) sans rien enregistrer ni indexer.">Tester l'accès</button>
+    <button class="btn" type="submit" name="sync_now" value="true"
+            title="Enregistre la source et lance tout de suite l'indexation (suivie sur la page Sources).">{% if editing %}Enregistrer et synchroniser{% else %}Ajouter et synchroniser{% endif %}</button>
+    <button class="btn secondary" type="submit"
+            title="Enregistre la source sans l'indexer maintenant : la synchro se fera à la demande ou à l'heure prévue.">{% if editing %}Enregistrer{% else %}Ajouter sans synchroniser{% endif %}</button>
+    <span id="test-wait" class="htmx-indicator hint">Connexion et parcours de la source…</span>
+  </div>
+</form>
+<script>
+  (function () {
+    var type = document.getElementById('s-type');
+    function show() {
+      document.querySelectorAll('[data-kind]').forEach(function (el) {
+        var on = el.dataset.kind.split(' ').indexOf(type.value) >= 0;
+        el.hidden = !on;
+        // champs masqués : non envoyés (deux champs « dossier » ou « compte » selon le type)
+        el.querySelectorAll('input, textarea, select').forEach(function (i) { i.disabled = !on; });
+      });
+      document.getElementById('test-result').innerHTML = '';
+    }
+    type.addEventListener('change', show);
+    show();
+  })();
+</script>
+{% endblock %}

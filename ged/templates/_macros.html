@@ -1,0 +1,42 @@
+{# Puces des droits d'un document : autorisés, puis refus explicites (barrés) #}
+{% macro acl_chips(acl) -%}
+<span class="groups">
+  {%- for p in acl.allow|sort %}<span class="group" title="{{ p }}">{{ pname(p) }}</span>{% endfor -%}
+  {%- for p in acl.deny|sort %}<span class="group deny" title="Refus explicite : {{ p }}">{{ pname(p) }}</span>{% endfor -%}
+  {%- if not acl.allow %}<span class="group none">personne</span>{% endif -%}
+</span>
+{%- endmacro %}
+
+{# Avancement d'une synchro en cours (SyncManager.progress) #}
+{% macro sync_progress(p, compact=False) -%}
+{% if p %}
+<div class="progress{% if compact %} compact{% endif %}">
+  {% if p.phase == "parcours" %}
+  <div class="progress-bar indeterminate" role="progressbar" aria-label="Parcours de la source"><span></span></div>
+  <p class="sub">Parcours de la source : {{ p.found|num }} fichier{{ 's' if p.found > 1 }} trouvé{{ 's' if p.found > 1 }}…</p>
+  {% else %}
+  <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ p.pct|round|int }}"
+       aria-label="Documents traités"><span style="width: {{ '%.1f'|format(p.pct) }}%"></span></div>
+  <p class="sub"><b>{{ p.pct|round|int }} %</b> · {{ p.done|num }} / {{ p.total|num }} documents
+    {%- if p.phase == "validations" %} · reprise des validations Alambic Light
+    {%- elif p.eta is not none and p.eta > 5 %} · reste environ {{ duration(0, p.eta) }}{% endif %}
+    {% if p.current and not compact and p.phase == "traitement" %}<br><span class="path">{{ p.current }}</span>{% endif %}</p>
+  {% endif %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{# Aide contextuelle : « ? » à côté d'un libellé, bulle au survol, au focus clavier et au toucher #}
+{% macro help(id, text) -%}
+<span class="help"><button type="button" class="help-btn" aria-label="Aide" aria-describedby="{{ id }}">?</button><span role="tooltip" id="{{ id }}" class="help-tip">{{ text }}</span></span>
+{%- endmacro %}
+
+{# Libellé de champ + aide #}
+{% macro label(for_id, text, tip) -%}
+<div class="label-row"><label for="{{ for_id }}">{{ text }}</label>{% if tip %}{{ help("h-" ~ for_id, tip) }}{% endif %}</div>
+{%- endmacro %}
+
+{# Vignette d'une page (lien vers le document) ; rien si le format n'en a pas #}
+{% macro thumb(url, href) -%}
+{% if url %}<a class="thumb" href="{{ href }}" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="{{ url }}&amp;l=160" srcset="{{ url }}&amp;l=160 1x, {{ url }}&amp;l=320 2x" width="80" height="107" loading="lazy" decoding="async" alt=""></a>{% else %}<span class="thumb thumb-none" aria-hidden="true"></span>{% endif %}
+{%- endmacro %}

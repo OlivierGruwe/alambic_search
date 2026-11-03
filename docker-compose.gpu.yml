@@ -1,0 +1,12 @@
+# Accès d'Ollama à une carte NVIDIA (Docker Desktop WSL2 ou Linux + NVIDIA Container Toolkit).
+# Utilisé par `make db-gpu` / `make up-gpu`. Sous Windows avec une carte AMD : installer Ollama
+# directement sur Windows plutôt que dans Docker.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
