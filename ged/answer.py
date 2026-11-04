@@ -146,6 +146,33 @@ def build_document_context(docs: list[DocResult]) -> str:
     return "\n\n".join(parts)
 
 
+CONDENSE_PROMPT = """Tu réécris la dernière question d'un utilisateur pour qu'elle se comprenne SEULE,
+sans l'échange qui précède : remplace les pronoms et les sous-entendus (« et pour Durand ? »,
+« son montant », « le même mois ») par ce qu'ils désignent dans l'échange.
+Garde la langue, les noms, les numéros et les identifiants exactement comme écrits.
+Si la question se comprend déjà seule, recopie-la telle quelle.
+Réponds UNIQUEMENT par la question réécrite, sans guillemets ni explication."""
+
+HISTORY_TURNS = 3  # échanges précédents pris en compte
+
+
+def standalone_question(question: str, history: list[dict], llm: LLM | None) -> str:
+    """Question de suivi → question autonome (pour la recherche ET la réponse). Sans LLM ou en cas
+    d'échec : la question telle quelle."""
+    turns = [t for t in (history or []) if str(t.get("question") or "").strip()][-HISTORY_TURNS:]
+    if not turns or llm is None:
+        return question
+    dialogue = "\n".join(
+        f"Utilisateur : {str(t['question']).strip()[:500]}\nAssistant : {str(t.get('reponse') or '').strip()[:600]}"
+        for t in turns)
+    try:
+        raw = llm.complete(CONDENSE_PROMPT, f"Échange :\n{dialogue}\n\nDernière question : {question}")
+    except Exception:
+        return question
+    line = next((x.strip().strip('«»"\'').strip() for x in str(raw).splitlines() if x.strip()), "")
+    return line if 3 <= len(line) <= 600 else question
+
+
 def ask(
     question: str,
     groups: frozenset[str],
@@ -158,9 +185,25 @@ def ask(
     doc_types: frozenset[str] | None = None,
     url_for=lambda h: f"/documents/{h.source}/{doc_path(h.doc_id)}#page={h.page}",
     per_document: bool = False,
+    reranker=None,
+    history: list[dict] | None = None,
 ) -> Answer:
     """`per_document` : un résultat par document (ses passages regroupés), k documents ;
-    les numéros [n] désignent alors des documents, pas des passages."""
+    les numéros [n] désignent alors des documents, pas des passages.
+    `reranker` : reclassement des passages (ged.rerank). `history` : échanges précédents
+    [{question, reponse}] — la question de suivi est d'abord rendue autonome."""
+    asked = question
+    if history:
+        question = standalone_question(question, history, llm)
+    answer = _answer(question, groups, store, embedder, llm, k=k, generate=generate, doc_types=doc_types,
+                     url_for=url_for, per_document=per_document, reranker=reranker)
+    if question != asked:
+        answer.reformulated = question
+    return answer
+
+
+def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, url_for, per_document,
+            reranker) -> Answer:
     if generate and llm is not None:
         criteria = translate(question, store, llm)
         if criteria is not None:
@@ -173,7 +216,11 @@ def ask(
     exact = exact_documents(store, groups, idents, doc_types) if idents else {}
     # par document ou filtrage par identifiant : plus de passages, puis sélection
     wide = k * 4 if (per_document or exact) else k
+    if reranker is not None:  # assez de candidats pour que le reclassement ait du choix
+        wide = max(wide, reranker.candidates)
     hits = dedupe(store.search(question, vector, groups, k=wide, doc_types=doc_types or None))
+    if reranker is not None:
+        hits = reranker.rerank(question, hits)
     if exact:
         hits = [h for h in hits if (h.source, h.doc_id) in exact]
         seen = {(h.source, h.doc_id) for h in hits}

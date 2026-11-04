@@ -126,3 +126,65 @@ def test_cli_eval(connector, store, embedder, jeu, tmp_path, monkeypatch):
     assert cli.main(["eval", str(jeu), "--sortie", str(out)]) == 0
     assert json.loads(out.read_text(encoding="utf-8"))["resume"]["questions"] == 4
     assert cli.main(["eval", str(jeu), "--reference", str(out)]) == 0
+
+
+def test_cli_explains_missing_dataset(store, embedder, tmp_path, monkeypatch, capsys):
+    from ged import cli
+
+    monkeypatch.setattr("ged.store.PgStore", lambda *a, **k: store)
+    monkeypatch.setattr(store, "init", lambda: None, raising=False)
+    monkeypatch.setattr("ged.embeddings.OpenAICompatEmbedder", lambda *a, **k: embedder)
+    assert cli.main(["eval", str(tmp_path / "jeu.yaml")]) == 2
+    assert "make eval-generer" in capsys.readouterr().err
+
+
+def test_generator_rejects_questions_that_need_the_passage(connector, store, embedder, share):
+    (share / "Compta" / "long.txt").write_text("Procédure de clôture comptable. " * 20, encoding="utf-8")
+    sync_source(connector, store, embedder)
+    bad = FakeLLM(json.dumps({"question": "Quelle est la date mentionnée dans ce document ?", "reponse": "x"}))
+    assert ev.generate_candidates(store, bad, n=3) == []
+    for q in ("Selon le passage, combien de jours ?", "Que dit cet extrait ?", "Qui est la personne citée ci-dessus ?"):
+        assert ev._DEICTIC.search(q), q
+    assert not ev._DEICTIC.search("Quelle est la date de naissance d'Olivier Gruwe sur son passeport ?")
+
+
+def test_generator_accepts_near_identical_documents(connector, store, embedder, share):
+    notice = "Ce passeport contient un composant électronique sensible. Ne pas plier ni exposer à la chaleur. " * 4
+    for name in ("passeport-olivier.txt", "passeport-alice.txt"):
+        (share / "Compta" / name).write_text(notice + f"Titulaire : {name}", encoding="utf-8")
+    sync_source(connector, store, embedder)
+    llm = FakeLLM(json.dumps({"question": "Un passeport contient-il un composant électronique ?", "reponse": "oui"}))
+    items = [i for i in ev.generate_candidates(store, llm, n=10, embedder=embedder) if "passeport" in i["documents"][0]]
+    assert items and len(items[0]["documents"]) == 2  # les deux passeports sont de bonnes réponses
+
+
+def test_missed_document_gets_extended_rank(connector, store, embedder, tmp_path):
+    sync_source(connector, store, embedder)
+    path = tmp_path / "j.yaml"
+    path.write_text(yaml.safe_dump({"questions": [
+        {"id": "x", "question": "horaires d'ouverture de la mairie", "groupes": ["compta", "tous"], "k": 1,
+         "documents": ["contrat-fournisseur.docx"]}]}), encoding="utf-8")
+    q = ev.evaluate(ev.load_cases(path), store, embedder)["questions"][0]
+    assert q["trouve"] is False and q["rang_etendu"] and q["rang_etendu"] > 1
+    assert "rang réel" in ev.format_report(ev.evaluate(ev.load_cases(path), store, embedder))
+
+
+def test_generator_varies_documents_and_skips_boilerplate(connector, store, embedder, share):
+    boiler = "Mentions légales : ce courrier est généré automatiquement par la banque. " * 5
+    for i in range(6):  # 6 copies du même courrier type
+        (share / "Compta" / f"courrier-{i}.txt").write_text(boiler + f"Ref {i}", encoding="utf-8")
+    (share / "Compta" / "rapport.txt").write_text("Rapport annuel : le chiffre d'affaires progresse de 12 %. " * 6,
+                                                  encoding="utf-8")
+    sync_source(connector, store, embedder)
+    n = iter(range(1000))
+
+    class Llm:
+        def complete(self, system, user):
+            return json.dumps({"question": f"Question numéro {next(n)} sur un sujet précis ?", "reponse": "x"})
+
+    stats: dict = {}
+    items = ev.generate_candidates(store, Llm(), n=20, embedder=embedder, stats=stats)
+    refs = [d for i in items for d in i["documents"]]
+    assert len(refs) == len(set(refs))  # chaque document (ou copie) interrogé une seule fois
+    assert not any("courrier-" in r for r in refs) and stats["texte_type"] >= 1
+    assert any("rapport.txt" in r for r in refs)

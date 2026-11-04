@@ -270,3 +270,8 @@ a.thumb:hover, a.thumb:focus-visible { border-color: var(--al-accent, #A9561F); 
 .sources li.with-thumb > * { grid-column: auto; }
 .with-thumb .cite { margin-right: 6px; }
 @media (max-width: 520px) { .doc-list li.with-thumb, .sources li.with-thumb { grid-template-columns: 56px minmax(0, 1fr); } }
+
+/* Questions de suivi */
+.conv-note { margin: 0 0 10px; font-style: italic; }
+.conv-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }

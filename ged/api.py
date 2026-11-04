@@ -32,12 +32,20 @@ from ged.store import Store
 from ged.sync import MassDeletionGuard, sync_source
 
 
+class Echange(BaseModel):
+    question: str = Field(max_length=2000)
+    reponse: str = Field(default="", max_length=8000)
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=2000)
     k: int = Field(default=8, ge=1, le=30)
     types: list[str] = Field(default_factory=list, max_length=50,
                              description="Limiter aux types de documents Alambic (ex. FACTURE)")
     formuler: bool = Field(default=True, description="false : extraits pertinents sans formulation par le LLM")
+    historique: list[Echange] = Field(default_factory=list, max_length=10,
+                                      description="Échanges précédents (questions de suivi) : la question est "
+                                                  "d'abord rendue autonome par le LLM")
     par_document: bool = Field(default=False, description="true : un résultat par document (k documents distincts, "
                                "passages regroupés) ; les citations [n] désignent alors des documents")
 
@@ -65,7 +73,7 @@ def create_app(
     schedule: dict[str, float] | None = None,
     session_secret: str | None = None, cookie_secure: bool = False, trust_headers: bool | None = None,
     source_factory=None, yaml_sources: list[dict] | None = None, oidc=None, portal: list[dict] | None = None,
-    secret_box=None,
+    secret_box=None, reranker=None, scheduler: bool = True, auto_sync_empty: bool = False,
 ) -> FastAPI:
     import os
 
@@ -81,17 +89,19 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        manager.start_scheduler()
+        if scheduler:  # SCHEDULER_ENABLED=false : instance web seule (Swarm : le service worker planifie)
+            manager.start_scheduler()
         yield
         manager.stop_scheduler()
         if hasattr(store, "close"):  # rend les connexions du pool à l'arrêt
             store.close()
-        for client in (analyzer, converter):
+        for client in (analyzer, converter, reranker):
             if client is not None:
                 client.close()
 
     app = FastAPI(title="Alambic Search", lifespan=lifespan)
-    manager = SyncManager(store, embedder, connectors, analyzer, converter, schedule)
+    manager = SyncManager(store, embedder, connectors, analyzer, converter, schedule,
+                          auto_sync_empty=auto_sync_empty and scheduler)
     from ged.config import build_connector
     from ged.sources import SourceCatalog
 
@@ -170,7 +180,7 @@ def create_app(
         return None if session is None else list(session.get("r", []))
 
     app.include_router(build_router(store, embedder, llm, connectors, manager, admin_password, identity, analyzer,
-                                    converter, catalog, admin_session, session_roles, thumbnail))
+                                    converter, catalog, admin_session, session_roles, thumbnail, reranker))
 
 
     @app.get("/health")
@@ -211,19 +221,23 @@ def create_app(
         connector = connectors.get(name)
         if connector is None:
             raise HTTPException(404, f"Source inconnue : {name}")
-        if manager.is_running(name):
+        lock = None if manager.is_running(name) else store.sync_lock(name)  # verrou partagé entre instances
+        if lock is None:
             raise HTTPException(409, "Une synchronisation de cette source est déjà en cours")
-        run_id = store.start_run(name)
         try:
-            report = sync_source(connector, store, embedder, analyzer=analyzer, converter=converter)
-        except MassDeletionGuard as exc:
-            store.finish_run(run_id, RunStatus.BLOCKED, message=str(exc))
-            raise HTTPException(409, str(exc)) from exc
-        except Exception as exc:
-            store.finish_run(run_id, RunStatus.FAILED, message=f"{type(exc).__name__} : {exc}")
-            raise
-        store.finish_run(run_id, RunStatus.PARTIAL if report.errors else RunStatus.OK, asdict(report))
-        return asdict(report)
+            run_id = store.start_run(name)
+            try:
+                report = sync_source(connector, store, embedder, analyzer=analyzer, converter=converter)
+            except MassDeletionGuard as exc:
+                store.finish_run(run_id, RunStatus.BLOCKED, message=str(exc))
+                raise HTTPException(409, str(exc)) from exc
+            except Exception as exc:
+                store.finish_run(run_id, RunStatus.FAILED, message=f"{type(exc).__name__} : {exc}")
+                raise
+            store.finish_run(run_id, RunStatus.PARTIAL if report.errors else RunStatus.OK, asdict(report))
+            return asdict(report)
+        finally:
+            lock.release()
 
     def document_url(h) -> str:
         """Lien de citation : un fichier bureautique s'ouvre en PDF, à la page citée."""
@@ -248,7 +262,8 @@ def create_app(
     templates.env.globals["bandeau"] = lambda request: build_context(
         request, auth, portal or [], admin_client_id=oidc.client_id if oidc else None)
 
-    app.include_router(build_user_router(store, embedder, llm, auth, throttle, document_url, portal or []))
+    app.include_router(build_user_router(store, embedder, llm, auth, throttle, document_url, portal or [],
+                                         reranker=reranker))
 
     def _criteria_json(r) -> dict:
         return {
@@ -289,9 +304,16 @@ def create_app(
 
         k = min(max(k, 1), 30)
         if par_document:
-            hits = dedupe(store.search(q, embedder.embed([q])[0], groups, k=k * 4, doc_types=_types(types)))
+            hits = dedupe(store.search(q, embedder.embed([q])[0], groups, k=max(k * 4, reranker.candidates if reranker else 0),
+                                       doc_types=_types(types)))
+            if reranker is not None:
+                hits = reranker.rerank(q, hits)
             return [_document_json(d) for d in group_by_document(hits, k, document_url)]
-        hits = store.search(q, embedder.embed([q])[0], groups, k=k, doc_types=_types(types))
+        hits = store.search(q, embedder.embed([q])[0], groups, k=max(k, reranker.candidates if reranker else 0),
+                            doc_types=_types(types))
+        if reranker is not None:
+            hits = reranker.rerank(q, dedupe(hits))
+        hits = hits[:k]
         return [
             {"path": h.path, "page": h.page, "type": h.doc_label, "score": round(h.score, 5), "excerpt": h.text[:300],
              "url": document_url(h)}
@@ -302,12 +324,15 @@ def create_app(
     def ask_question(req: AskRequest, groups: frozenset[str] = Depends(user_groups)):
         t0 = time.perf_counter()
         answer = ask(req.question, groups, store, embedder, llm, k=req.k, doc_types=frozenset(req.types) or None,
-                     generate=req.formuler, url_for=document_url, per_document=req.par_document)
+                     generate=req.formuler, url_for=document_url, per_document=req.par_document, reranker=reranker,
+                     history=[e.model_dump() for e in req.historique])
         store.log_question(groups, req.question, len(answer.hits), len(answer.citations),
                            int((time.perf_counter() - t0) * 1000))
         return {
             "text": answer.text,
             "formulee": answer.generated,
+            # question de suivi rendue autonome (null si la question se suffisait)
+            "question_comprise": answer.reformulated,
             # identifiants de la question (n° de permis, de facture…) : seuls les documents qui les contiennent
             "identifiants": list(answer.identifiers),
             "identifiants_introuvables": list(answer.identifiers_absent),
@@ -375,6 +400,10 @@ def app_from_env() -> FastAPI:
     """Point d'entrée uvicorn : `uvicorn ged.api:app_from_env --factory`."""
     import logging
     import os
+
+    from ged.envfiles import load_env_files
+
+    load_env_files()  # secrets Docker : ADMIN_PASSWORD_FILE=/run/secrets/… → ADMIN_PASSWORD
 
     import psycopg
     import yaml
@@ -454,6 +483,14 @@ def app_from_env() -> FastAPI:
         log.info("Vignettes : PDF et images%s", " ; bureautique via la conversion PDF" if converter else "")
     except ImportError:
         log.warning("Vignettes des PDF indisponibles : pypdfium2 absent (uv sync, ou reconstruire l'image Docker)")
+    from ged.rerank import load_reranker
+
+    reranker = load_reranker()
+    if reranker is not None:
+        ok, detail = reranker.check()  # n'empêche pas le démarrage : repli sur l'ordre hybride
+        (log.info if ok else log.warning)("Reclassement des résultats : %s", detail)
+    else:
+        log.info("Reclassement des résultats non configuré (RERANK_URL) : ordre de la recherche hybride")
     if converter is not None:
         ok, detail = converter.check()
         (log.info if ok else log.warning)("Conversion PDF des fichiers bureautiques : %s", detail)
@@ -495,6 +532,10 @@ def app_from_env() -> FastAPI:
         oidc=oidc,
         portal=portal,
         secret_box=secret_box,
+        reranker=reranker,
+        scheduler=os.environ.get("SCHEDULER_ENABLED", "true").lower() not in ("0", "false", "non", "no", "off"),
+        # index vide (base perdue sans sauvegarde) : toutes les sources resynchronisées au démarrage
+        auto_sync_empty=os.environ.get("AUTO_SYNC_EMPTY", "true").lower() not in ("0", "false", "non", "no", "off"),
     )
     log.info("Sources : %s. Console : /admin", ", ".join(app.state.catalog.names()) or "aucune (à ajouter dans la console)")
     return app

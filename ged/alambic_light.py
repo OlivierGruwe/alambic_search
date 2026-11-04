@@ -177,14 +177,18 @@ class AlambicLight:
             rec = self._wait(rec["uuid"], r.headers.get("Location"))
         return self._analysis(rec, with_text=True)
 
-    def ocr(self, data: bytes, filename: str, *, source: str, identifiant: str) -> tuple[list[Page] | None, str | None]:
+    def ocr(self, data: bytes, filename: str, *, source: str, identifiant: str,
+            ia_ocr: bool = False) -> tuple[list[Page] | None, str | None]:
         """OCR seul (sources « texte seul ») : même appel que le typage, avec ocr_only=true.
+        `ia_ocr` : lecture par l'IA (ocr=ia), sinon le moteur par défaut d'Alambic Light.
         Seul le texte est gardé : un type ou des données éventuellement renvoyés sont ignorés.
         Renvoie (pages, erreur)."""
+        params = {"ia": str(self.ia).lower(), "ocr_only": "true"}
+        if ia_ocr:
+            params["ocr"] = "ia"
         files = {"fichier": (PurePosixPath(filename).name, data)}
         form = {"source": source[:200], "identifiant": identifiant[:500]}
-        r = self._request("POST", "/v1/documents/typage",
-                          params={"ia": str(self.ia).lower(), "ocr_only": "true"}, files=files, data=form)
+        r = self._request("POST", "/v1/documents/typage", params=params, files=files, data=form)
         if r.status_code in (413, 415):
             raise LightRejected(_detail(r))
         rec = self._json(r)

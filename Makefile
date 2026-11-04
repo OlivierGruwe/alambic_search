@@ -9,10 +9,12 @@ PORT ?= 8002
 EMBED_MODEL ?= bge-m3
 LLM_MODEL ?= qwen2.5:7b
 SOURCE ?= partage-commun
+# SOURCE donnée explicitement (make … SOURCE=x), pas la valeur par défaut ci-dessus réservée à make sync
+SOURCE_OPT = $(if $(filter-out file,$(origin SOURCE)),--source $(SOURCE))
 # Base de test PostgreSQL/pgvector (make test-pg) : surcharger si besoin
 GED_TEST_DSN ?= postgresql://ged:ged@localhost:5433/ged
 
-.PHONY: sso light-check help install lock db db-gpu up-gpu gpu-check run test test-pg test-smb samba lint format check sync ask up down logs pull-models clean eval eval-reference eval-generer secrets-key secrets-rotate
+.PHONY: sso light-check help install lock db db-gpu up-gpu gpu-check run test test-pg test-smb samba lint format check sync ask up down logs pull-models clean eval eval-init eval-reference eval-generer secrets-key secrets-rotate rerank rerank-gpu rerank-modele revectoriser image push stack-deploy stack-ps stack-logs stack-rollback
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -67,6 +69,46 @@ check: lint test ## Lint + tests (avant un commit)
 sync: ## Synchronise une source : make sync SOURCE=partage-commun
 	uv run $(ENV_FILE) alambic-search sync $(SOURCE)
 
+# --- Production (Docker Swarm) ----------------------------------------------------------
+STACK ?= search
+STACK_ENV = deploy/swarm/stack.env
+stack_vars = set -a && . ./$(STACK_ENV) && set +a
+
+image: ## Construit l'image de production : make image (REGISTRY et TAG lus dans deploy/swarm/stack.env)
+	@test -f $(STACK_ENV) || (echo "Créer $(STACK_ENV) depuis deploy/swarm/stack.env.example" && exit 1)
+	$(stack_vars) && docker build -t $$REGISTRY/alambic-search:$$TAG .
+
+push: image ## Construit et pousse l'image vers le registre
+	$(stack_vars) && docker push $$REGISTRY/alambic-search:$$TAG
+
+stack-deploy: ## Déploie ou met à jour la stack sur le Swarm (depuis un manager)
+	@test -f deploy/swarm/sources.yaml || (echo "Créer deploy/swarm/sources.yaml depuis sources.example.yaml" && exit 1)
+	$(stack_vars) && docker stack deploy -c deploy/swarm/stack.yml --with-registry-auth --prune $(STACK)
+
+stack-ps: ## État des services et des tâches de la stack
+	docker stack services $(STACK)
+	docker stack ps $(STACK) --no-trunc --filter desired-state=running
+
+stack-logs: ## Journaux d'un service : make stack-logs S=api
+	docker service logs --tail 200 -f $(STACK)_$(S)
+
+stack-rollback: ## Revient à la version précédente d'un service : make stack-rollback S=api
+	docker service rollback $(STACK)_$(S)
+
+rerank: ## Démarre le reclassement (bge-reranker-v2-m3, CPU) sur http://127.0.0.1:8082 — puis RERANK_URL dans .env
+	docker compose --profile rerank up -d rerank
+	@echo "Premier démarrage : téléchargement du modèle (~2 Go). Suivi : docker compose logs -f rerank"
+
+rerank-modele: ## Télécharge le modèle de reclassement sur le poste (./models), si le conteneur n'y arrive pas
+	uvx --from huggingface_hub hf download BAAI/bge-reranker-v2-m3 --local-dir models/bge-reranker-v2-m3
+	@echo "Puis dans .env : RERANK_MODEL_ID=/models/bge-reranker-v2-m3 ; et make rerank"
+
+rerank-gpu: ## Comme rerank, sur la carte NVIDIA (RERANK_IMAGE dans .env)
+	docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile rerank up -d rerank
+
+revectoriser: ## Recalcule les vecteurs (contexte document/section) sans relire les fichiers : make revectoriser [SOURCE=…]
+	uv run $(ENV_FILE) alambic-search revectoriser $(SOURCE_OPT)
+
 JEU ?= eval/jeu.yaml
 N ?= 30
 
@@ -74,11 +116,15 @@ eval: ## Mesure la qualité sur le jeu de questions : make eval [JEU=eval/jeu.ya
 	uv run $(ENV_FILE) alambic-search eval $(JEU) $(if $(REPONSES),--reponses) --sortie eval/derniere.json \
 		$(if $(wildcard eval/reference.json),--reference eval/reference.json)
 
+eval-init: ## Crée eval/jeu.yaml directement depuis l'index (questions générées, non relues) : make eval-init [N=30]
+	@test ! -f $(JEU) || (echo "$(JEU) existe deja : rien a faire (le supprimer pour le recreer)" && exit 1)
+	uv run $(ENV_FILE) alambic-search eval-generer --n $(N) $(SOURCE_OPT) --sortie $(JEU)
+
 eval-reference: ## Fait de la dernière mesure la référence (les suivantes s'y comparent)
 	cp eval/derniere.json eval/reference.json
 
 eval-generer: ## Questions candidates tirées de l'index, à relire : make eval-generer [N=30] [SOURCE=…]
-	uv run $(ENV_FILE) alambic-search eval-generer --n $(N) $(if $(SOURCE),--source $(SOURCE)) --sortie eval/candidates.yaml
+	uv run $(ENV_FILE) alambic-search eval-generer --n $(N) $(SOURCE_OPT) --sortie eval/candidates.yaml
 
 secrets-key: ## Génère une clé SECRETS_KEY (chiffrement des mots de passe saisis dans la console)
 	@uv run python -m ged.secret_box cle
@@ -91,7 +137,9 @@ light-check: ## Teste la connexion à Alambic Light (section alambic_light de so
 
 sso: ## Démarre Keycloak (connexion unique) sur http://localhost:8180 — comptes de démo : demo
 	@docker network inspect alambic_sso >/dev/null 2>&1 || docker network create alambic_sso
-	docker compose --profile sso up -d keycloak
+	# --force-recreate : un conteneur créé avec un ancien réseau alambic_sso (supprimé puis recréé)
+	# ne démarrerait plus ; les données de Keycloak sont dans son volume, conservées
+	docker compose --profile sso up -d --force-recreate keycloak
 	@echo "Console Keycloak : http://localhost:8180/admin (admin / KEYCLOAK_ADMIN_PASSWORD)"
 	@echo "Activer dans sources.yaml : section oidc (voir sources.example.yaml)"
 

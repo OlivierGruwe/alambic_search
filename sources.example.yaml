@@ -84,6 +84,7 @@ sources:
   #   password_env: SMB_PASSWORD
   #   encrypt: true                 # chiffrement SMB3 si le serveur le permet
   #   analyse_light: false          # texte seul : ni type ni données, OCR des scans seulement
+  #   ocr_ia: true                  # texte seul : scans lus par l'IA d'Alambic Light (ocr=ia, payant)
   #   acl_refresh_hours: 24         # relecture périodique des droits (filet de sécurité)
 
   # Dossier local ou partage monté : les droits sont des règles par dossier.

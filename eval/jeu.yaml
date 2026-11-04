@@ -1,0 +1,88 @@
+# Questions CANDIDATES générées à partir des documents : à relire avant usage.
+# Pour chaque question : la reformuler comme un vrai utilisateur, vérifier le document
+# attendu, garder « reponse_attendue » comme aide ou la transformer en « mots ».
+# Ajouter des questions sans réponse (sans_reponse: true) et des documents interdits.
+questions:
+- id: gen-001
+  question: Quand aura lieu la réunion du Conseil Municipal de PAYZAC ?
+  documents:
+  - dev-cgr-files-v1:auto/doc-20260330_090634979082_4e74eea0_00001.pdf
+  pages:
+  - 1
+  groupes:
+  - direction
+  reponse_attendue: le lundi 30 mars 2026 à 20h00
+- id: gen-002
+  question: Quel est le montant de la taxe d'habitation à payer ?
+  documents:
+  - partage-commun:Avis_de_taxe_d_habitation_2026.pdf
+  pages:
+  - 1
+  groupes:
+  - direction
+  reponse_attendue: 102,00 €
+- id: gen-003
+  question: Quel est le montant à répartir pour l'appel de provision exceptionnelle ?
+  documents:
+  - dev-cgr-files-v1:auto/doc-20260325_174207281238_4e651f5d_00001.pdf
+  pages:
+  - 1
+  groupes:
+  - direction
+  reponse_attendue: ð
+- id: gen-004
+  question: Quel est le coût total mentionné sur la facture ?
+  documents:
+  - dev-cgr-files-v1:auto/doc-20260430_091224059124_70ea7c93_00001.pdf
+  pages:
+  - 3
+  groupes:
+  - direction
+  reponse_attendue: 2,99 €
+- id: gen-005
+  question: Quel est le taux de pénalité en cas de non-paiement des sommes exigibles ?
+  documents:
+  - partage-commun:invoice__1526010788721.pdf
+  pages:
+  - 2
+  groupes:
+  - direction
+  reponse_attendue: 3 fois le taux d'intérêt légal en vigueur au jour d'émission
+- id: gen-006
+  question: Quelle est la date de naissance du titulaire du passeport ?
+  documents:
+  - dev-cgr-files-v1:auto/doc-20260429_153438029889_eedbfcac_00001.pdf
+  - dev-cgr-files-v1:auto/doc-20260429_151325081093_97c9e35d_00001.pdf
+  - dev-cgr-files-v1:auto/doc-20260429_151049053621_3cf262b6_00001.pdf
+  pages:
+  - 1
+  groupes:
+  - direction
+  reponse_attendue: 27 011973
+- id: gen-007
+  question: Quel est le numéro d'assurance maladie de la personne mentionnée ?
+  documents:
+  - dev-cgr-files-v1:auto/doc-20260429_145135129627_222a5670_00001.pdf
+  pages:
+  - 2
+  groupes:
+  - direction
+  reponse_attendue: 2 71 04 33 063 090 16
+- id: gen-008
+  question: Quel est le numéro SIREN de l'Association TERRA NOVA PAISAL ?
+  documents:
+  - partage-commun:convention asso.pdf
+  pages:
+  - 1
+  groupes:
+  - direction
+  reponse_attendue: À 2Q 8SL£23
+- id: gen-009
+  question: Quelle est l'hypothèse implicite forte sur la distribution intra-classe selon le document ?
+  documents:
+  - partage-commun:ARONDOR_SMART_AUTOMATION_2025_FlowerScan_V1.docx
+  pages:
+  - 1
+  groupes:
+  - direction
+  reponse_attendue: la distribution intra-classe est unimodale dans l'espace vectoriel

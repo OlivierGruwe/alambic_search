@@ -130,6 +130,28 @@ bonne page ; avec `REPONSES=1`, citations justes, mots attendus, refus quand auc
 répond. **Fuites** : un document déclaré interdit retrouvé ou cité, à corriger en priorité.
 Code retour 1 en cas de fuite ou de régression (utilisable en intégration continue).
 
+## RAG : reclassement, questions de suivi, contexte des passages
+
+- **Reclassement** (facultatif) : la recherche hybride ramène 40 candidats, un modèle spécialisé
+  (`BAAI/bge-reranker-v2-m3`) lit chaque couple question/passage et les réordonne. `make rerank`
+  (CPU) ou `make rerank-gpu`, puis `RERANK_URL=http://127.0.0.1:8082` dans `.env`. Service
+  injoignable : ordre de la recherche hybride, sans erreur. Si le conteneur n'arrive pas à télécharger le
+  modèle (« relative URL without a base », proxy) : `make rerank-modele` le télécharge sur le
+  poste dans `./models`, puis `RERANK_MODEL_ID=/models/bge-reranker-v2-m3` dans `.env`. Bac à sable : case « Reclasser » pour
+  comparer. Droits appliqués avant : le modèle ne voit que des passages autorisés.
+- **Questions de suivi** : « et pour Durand ? », « quel montant ? ». La page de recherche renvoie
+  les 3 derniers échanges ; le LLM réécrit la question pour qu'elle se comprenne seule (affichée
+  sous la réponse : « Question comprise… »), puis recherche et réponse se font sur cette question.
+  « Nouvelle conversation » repart de zéro. API : `historique` dans `/ask`, `question_comprise`
+  dans la réponse. Sans LLM : pas de reformulation.
+- **Contexte des passages** : le texte vectorisé commence par le document, son type et la section
+  en cours (« Document : Compta / contrat durand (Contrat) — ARTICLE 3 - PÉNALITÉS »). Le texte
+  affiché et la recherche par mots ne changent pas. Index existant : `make revectoriser`
+  (recalcule les vecteurs depuis la base, sans relire les fichiers ni rappeler Alambic Light).
+
+Mesurer avant/après : `make eval-reference` (état actuel), changer un réglage, `make eval` ;
+`alambic-search eval … --sans-reclassement` mesure sans reclassement.
+
 ## Alambic Light : OCR, type et données
 
 Avec une section `alambic_light` dans `sources.yaml` (voir `sources.example.yaml`), chaque PDF et
@@ -255,6 +277,9 @@ Case « Type et données (Alambic Light) » de chaque source (`analyse_light: fa
 - **Décochée** : texte intégral seulement. Les documents avec du texte ne partent pas vers
   Alambic Light ; les scans y sont envoyés pour leur seul texte, avec `ocr_only=true` sur
   `POST /v1/documents/typage` (un type ou des données éventuellement renvoyés sont ignorés).
+- **Lecture des scans par l'IA** (case visible en texte seul, `ocr_ia: true`) : ajoute `ocr=ia`
+  (`ocr_only=true&ocr=ia`), plus fiable sur les pièces d'identité, documents abîmés ou manuscrits,
+  mais payant. Ne s'applique qu'aux scans nouveaux ou modifiés.
 - Décocher retire, à la synchro suivante, les types, données et fiches déjà extraits. Recocher
   fait analyser, à la synchro suivante, les documents qui ne l'ont pas été.
 
@@ -264,6 +289,29 @@ Case « Type et données (Alambic Light) » de chaque source (`analyse_light: fa
 fichiers, droits, validations Alambic Light). Minimum 5 minutes ; sans ce réglage, synchro
 manuelle (console, `make sync`). Le planificateur tourne dans l'API : une seule instance d'API
 par base pour l'instant.
+
+## Production : Docker Swarm
+
+`deploy/swarm/` contient la stack de production (`stack.yml`) : `caddy` (HTTPS), `api` (2 instances
+et plus, sans état), `worker` (synchronisations planifiées), `db` + `backup`, `ollama`, `rerank`,
+`gotenberg`, `keycloak`. Secrets Docker (`secrets.sh`, variables `*_FILE` lues sous `/run/secrets`),
+placement par étiquettes de nœuds (`alambic.db`, `alambic.gpu`, `alambic.edge`).
+
+```bash
+sh deploy/swarm/secrets.sh                 # une fois, sur un manager
+cp deploy/swarm/stack.env.example deploy/swarm/stack.env      # puis adapter
+cp deploy/swarm/sources.example.yaml deploy/swarm/sources.yaml
+make push && make stack-deploy             # construire, publier, déployer
+make stack-ps                              # état
+```
+
+Plusieurs instances partagent un verrou PostgreSQL par source : une source n'est jamais
+synchronisée deux fois en même temps (api, worker, ligne de commande). `SCHEDULER_ENABLED=false`
+désactive la planification sur une instance. Base perdue : PostgreSQL recharge seul la dernière
+sauvegarde au démarrage sur un dossier vide (`RESTORE_ON_EMPTY`), et sans sauvegarde l'instance qui
+planifie resynchronise toutes les sources (`AUTO_SYNC_EMPTY`). Installation, mises à jour, ajout et retrait de
+nœuds, sauvegardes, rotations, incidents : dossier « Alambic Search — Dossier d'architecture et
+d'exploitation ».
 
 ## API
 

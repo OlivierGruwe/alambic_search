@@ -10,6 +10,7 @@ Il ne voit que les documents qu'il est autorisé à lire.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from urllib.parse import quote
@@ -50,7 +51,7 @@ def visible_apps(portal: list[dict], roles: list[str]) -> list[dict]:
 
 
 def build_user_router(store, embedder, llm, auth, throttle: LoginThrottle, document_url,
-                      portal: list[dict]) -> APIRouter:
+                      portal: list[dict], reranker=None) -> APIRouter:
     from ged.ui import templates
 
     router = APIRouter(include_in_schema=False)
@@ -213,7 +214,8 @@ def build_user_router(store, embedder, llm, auth, throttle: LoginThrottle, docum
 
     @router.post("/rechercher", response_class=HTMLResponse)
     def search(request: Request, mode: str = Form("question"), question: str = Form(""), valeur: str = Form(""),
-               doc_type: str = Form(""), formuler: bool = Form(False), par_document: bool = Form(False)):
+               doc_type: str = Form(""), formuler: bool = Form(False), par_document: bool = Form(False),
+               historique: str = Form("")):
         user = auth.session(request)
 
         def fragment(**ctx) -> HTMLResponse:
@@ -243,16 +245,33 @@ def build_user_router(store, embedder, llm, auth, throttle: LoginThrottle, docum
         if len(question) < 3:
             return fragment(error="Saisissez une question d'au moins 3 caractères.")
         try:
+            history = _history(historique)
             answer = ask(question, groups, store, embedder, llm, doc_types=frozenset({doc_type}) if doc_type else None,
-                         generate=formuler, url_for=document_url, per_document=par_document)
+                         generate=formuler, url_for=document_url, per_document=par_document, reranker=reranker,
+                         history=history)
         except Exception as exc:
             log.error("Question en échec : %s", exc)
             return fragment(error="Le moteur de recherche ne répond pas. Réessayez dans un instant.")
         ms = int((time.perf_counter() - t0) * 1000)
         store.log_question(groups, question, len(answer.hits), len(answer.citations), ms)
-        return fragment(answer=answer, r=answer.criteria, ms=ms)
+        # échanges à renvoyer avec la question suivante (questions de suivi)
+        turn = {"question": answer.reformulated or question, "reponse": answer.text[:1500]}
+        return fragment(answer=answer, r=answer.criteria, ms=ms, asked=question,
+                        historique=json.dumps((history + [turn])[-3:], ensure_ascii=False))
 
     return router
+
+
+def _history(raw: str) -> list[dict]:
+    """Historique renvoyé par la page (champ caché) : validé, borné, jamais fiable au-delà du texte."""
+    try:
+        data = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [{"question": str(t.get("question") or "")[:2000], "reponse": str(t.get("reponse") or "")[:2000]}
+            for t in data[-3:] if isinstance(t, dict)]
 
 
 def login_redirect(path: str) -> RedirectResponse:

@@ -26,11 +26,15 @@ def main(argv: list[str] | None = None) -> int:
     p_ask.add_argument("question")
     p_ask.add_argument("--groups", required=True, help="Groupes de l'utilisateur, séparés par des virgules")
     p_ask.add_argument("--extraits", action="store_true", help="Extraits pertinents, sans formulation par le LLM")
+    p_re = sub.add_parser("revectoriser", help="Recalcule les vecteurs des passages indexés (sans relire les fichiers)")
+    p_re.add_argument("--source", help="Limiter à une source")
     p_eval = sub.add_parser("eval", help="Mesure la qualité sur un jeu de questions de référence (YAML)")
     p_eval.add_argument("jeu", help="Fichier YAML du jeu de questions (voir ged/evaluation.py)")
     p_eval.add_argument("--reponses", action="store_true", help="Mesure aussi les réponses rédigées (LLM, plus lent)")
     p_eval.add_argument("--sortie", help="Enregistre la mesure (JSON), pour la comparer plus tard")
     p_eval.add_argument("--reference", help="Mesure précédente (JSON) : affiche écarts, régressions, progrès")
+    p_eval.add_argument("--sans-reclassement", action="store_true",
+                        help="Ignore RERANK_URL : mesure la recherche hybride seule (pour comparer)")
     p_gen = sub.add_parser("eval-generer", help="Génère des questions candidates (à relire) depuis l'index")
     p_gen.add_argument("--n", type=int, default=30, help="Nombre de questions (défaut 30)")
     p_gen.add_argument("--source", help="Limiter à une source")
@@ -38,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from ged.envfiles import load_env_files
+
+    load_env_files()  # secrets Docker (NOM_FILE)
     s = Settings.from_env()
     if args.cmd == "light-check":
         from ged.config import load_analyzer
@@ -78,21 +85,40 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Source inconnue : {args.source} (sources : {', '.join(sorted(connectors)) or 'aucune'})",
                   file=sys.stderr)
             return 2
+        lock = store.sync_lock(args.source)  # partagé avec l'API et le worker (Swarm)
+        if lock is None:
+            print(f"Synchronisation de {args.source} déjà en cours (API, worker ou autre commande)", file=sys.stderr)
+            return 4
         try:
             report = sync_source(connectors[args.source], store, embedder, analyzer=load_analyzer(s.sources_file),
                                  converter=converter)
         except MassDeletionGuard as exc:
             print(str(exc), file=sys.stderr)
             return 3
+        finally:
+            lock.release()
         print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
         return 1 if report.errors else 0
+
+    if args.cmd == "revectoriser":
+        from ged.sync import reembed
+
+        def step(n, path):
+            if n % 50 == 0:
+                print(f"  {n} documents… ({path})", file=sys.stderr)
+
+        n = reembed(store, embedder, args.source, progress=step)
+        print(f"{n} document(s) revectorisé(s)")
+        return 0
 
     if args.cmd in ("eval", "eval-generer"):
         return _evaluation(args, s, store, embedder)
 
     groups = frozenset(g.strip() for g in args.groups.split(",") if g.strip())
     llm = OpenAICompatLLM(s.llm_base_url, s.llm_model) if s.llm_model else None
-    answer = ask(args.question, groups, store, embedder, llm, generate=not args.extraits)
+    from ged.rerank import load_reranker
+
+    answer = ask(args.question, groups, store, embedder, llm, generate=not args.extraits, reranker=load_reranker())
     print(answer.text)
     for c in answer.citations:
         print(f"  [{c.n}] {c.path} (page {c.page})")
@@ -113,11 +139,31 @@ def _evaluation(args, s, store, embedder) -> int:
         if llm is None:
             print("Génération impossible sans LLM (LLM_MODEL vide)", file=sys.stderr)
             return 2
-        items = ev.generate_candidates(store, llm, n=args.n, source=args.source)
+        stats: dict = {}
+        items = ev.generate_candidates(store, llm, n=args.n, source=args.source, embedder=embedder, stats=stats)
+        print(f"Écartés : {stats['copies']} passage(s) de documents déjà interrogés (ou de leurs copies), "
+              f"{stats['texte_type']} texte(s) type (présents dans plus de {ev.MAX_EQUIVALENTS + 1} documents), "
+              f"{stats['doublon']} question(s) en double, {stats['renvoi']} question(s) en « ce document », "
+              f"{stats['inexploitable']} passage(s) inexploitable(s)", file=sys.stderr)
+        if len(items) < args.n:
+            print(f"Seulement {len(items)} question(s) sur {args.n} : l'index contient peu de documents distincts",
+                  file=sys.stderr)
+        if not items:
+            print("Aucune question générée : index vide, passages trop courts (< 200 caractères) "
+                  "ou LLM injoignable", file=sys.stderr)
+            return 1
         with open(args.sortie, "w", encoding="utf-8") as f:
             f.write(ev.candidates_yaml(items))
         print(f"{len(items)} question(s) candidate(s) dans {args.sortie} : à relire avant usage")
         return 0
+    if not os.path.isfile(args.jeu):
+        print(f"Jeu de questions introuvable : {args.jeu}\n"
+              "Le plus rapide : make eval-init N=30 (questions générées depuis l'index, à relire ensuite)\n"
+              "Ou, en relisant d'abord :\n"
+              "  1. make eval-generer N=30      → questions candidates tirées de l'index (eval/candidates.yaml)\n"
+              "  2. les relire, garder les bonnes, ajouter les vôtres (modèle : eval/jeu.exemple.yaml)\n"
+              f"  3. enregistrer le résultat sous {args.jeu}, puis make eval", file=sys.stderr)
+        return 2
     try:
         cases = ev.load_cases(args.jeu)
     except (OSError, ev.EvalError) as exc:
@@ -130,10 +176,17 @@ def _evaluation(args, s, store, embedder) -> int:
 
     def progress(i, n, res):
         mark = "ERREUR" if res.erreur else ("FUITE" if res.fuites else
-                                             ("rang " + str(res.rang) if res.rang else "—" if res.trouve is None else "absent"))
+                                             ("rang " + str(res.rang) if res.rang else "—" if res.trouve is None else
+                                              f"absent (rang {res.rang_etendu})" if res.rang_etendu else
+                                              "absent (au-delà de 50)"))
         print(f"  [{i}/{n}] {res.id} : {mark}", file=sys.stderr)
 
-    result = ev.evaluate(cases, store, embedder, llm, identity, with_answers=args.reponses, progress=progress)
+    from ged.rerank import load_reranker
+
+    reranker = None if args.sans_reclassement else load_reranker()
+    print(f"Reclassement : {reranker.describe() if reranker else 'aucun (recherche hybride seule)'}", file=sys.stderr)
+    result = ev.evaluate(cases, store, embedder, llm, identity, with_answers=args.reponses, progress=progress,
+                         reranker=reranker)
     comparison = None
     if args.reference:
         with open(args.reference, encoding="utf-8") as f:

@@ -115,6 +115,7 @@ templates.env.globals.update(DOC_STATUS=DOC_STATUS, DOC_LEGEND=DOC_LEGEND, RUN_S
 def build_router(
     store, embedder, llm, connectors: dict, manager: SyncManager, admin_password: str | None, identity=None,
     analyzer=None, converter=None, catalog=None, admin_session=None, session_roles=None, thumbnail=None,
+    reranker=None,
 ) -> APIRouter:
     from ged.api import resolve_principals
 
@@ -131,6 +132,7 @@ def build_router(
     templates.env.globals["pname"] = pname
     templates.env.globals["has_identity"] = identity is not None
     templates.env.globals["has_llm"] = llm is not None
+    templates.env.globals["reranker"] = reranker.describe() if reranker is not None else None
     templates.env.globals["converter_url"] = converter.url if converter is not None else None
     templates.env.globals["light"] = analyzer.describe() if analyzer is not None else None
     from ged.alambic_light import FICHE_CHUNK_NO, _human, _render
@@ -237,6 +239,8 @@ def build_router(
             "active": conn is not None,
             "analyse": (catalog.configs.get(name, {}).get("analyse_light", True) if catalog and name in catalog.configs
                         else getattr(conn, "analyse_light", True)),
+            "ocr_ia": (catalog.configs.get(name, {}).get("ocr_ia", False) if catalog and name in catalog.configs
+                       else getattr(conn, "ocr_ia", False)),
         }
 
     @router.get("/sources", response_class=HTMLResponse)
@@ -290,6 +294,7 @@ def build_router(
         cfg["synchro_minutes"] = get("synchro_minutes") or None
         if form.get("analyse_light_field"):  # case présente dans le formulaire
             cfg["analyse_light"] = form.get("analyse_light") == "true"
+            cfg["ocr_ia"] = form.get("ocr_ia") == "true"
         return cfg
 
     SECRET_PREFIX = {"smb": "smb", "ftp": "ftp", "alfresco": "ged", "cmis": "ged", "s3": "s3", "sharepoint": "sp"}
@@ -520,7 +525,7 @@ def build_router(
     def sandbox_ask(request: Request, question: str = Form(""), login: str = Form(""), groups: str = Form(""),
                     k: int = Form(8), doc_type: str = Form(""), formuler: bool = Form(False),
                     mode: str = Form("question"), valeur: str = Form(""), champ: str = Form(""),
-                    par_document: bool = Form(False)):
+                    par_document: bool = Form(False), reclasser: bool = Form(False)):
         if mode == "criteres":
             return sandbox_criteria(request, valeur, champ, doc_type, login, groups)
         try:
@@ -541,7 +546,7 @@ def build_router(
         try:
             answer = ask(question, grp, store, embedder, llm, k=min(max(k, 1), 30),
                          doc_types=frozenset({doc_type}) if doc_type else None, generate=formuler,
-                         per_document=par_document)
+                         per_document=par_document, reranker=reranker if reclasser else None)
         except Exception as exc:  # LLM ou embeddings injoignables
             return templates.TemplateResponse(
                 request, "_sandbox_result.html",

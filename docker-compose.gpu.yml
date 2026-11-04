@@ -10,3 +10,14 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # Reclassement sur la carte : RERANK_IMAGE=ghcr.io/huggingface/text-embeddings-inference:1.8
+  # (Ampere, Ada : RTX 30xx/40xx) ou …:turing-1.8 (RTX 20xx) dans .env, puis make rerank-gpu.
+  rerank:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

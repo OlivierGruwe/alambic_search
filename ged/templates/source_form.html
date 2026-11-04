@@ -50,6 +50,7 @@
   <div class="field wide">
     <input type="hidden" name="analyse_light_field" value="1">
     <div class="label-row"><label class="check-label"><input type="checkbox" name="analyse_light" value="true" {% if v.analyse_light is not defined or v.analyse_light %}checked{% endif %}> Type et données (Alambic Light)</label>{{ help("h-analyse", "Coché : Alambic Light reconnaît le type de chaque document (facture, RIB…) et en extrait les données, interrogeables et filtrables (« toutes les factures de M. GRUWE »). Décoché : texte intégral seulement ; Alambic Light ne sert qu'à lire les scans (OCR seul), sans reconnaissance ni données à valider. Décocher retire, à la synchro suivante, les types et données déjà extraits ; recocher fait analyser les documents qui ne l'ont pas été.") }}</div>
+    <div class="label-row" id="ocr-ia-row" style="margin-top: 8px"><label class="check-label"><input type="checkbox" name="ocr_ia" value="true" {% if v.ocr_ia %}checked{% endif %}> Lecture des scans par l'IA</label>{{ help("h-ocr-ia", "Texte seul uniquement. Coché : les scans sont lus par l'IA d'Alambic Light (ocr=ia), nettement plus fiable sur les pièces d'identité, les documents abîmés ou manuscrits, mais payant. Décoché : moteur par défaut d'Alambic Light. Ne s'applique qu'aux scans nouveaux ou modifiés.") }}</div>
     {% if not light %}<p class="hint">Alambic Light n'est pas configuré : texte intégral seulement pour toutes les sources, scans compris (« OCR requis »).</p>{% endif %}
   </div>
 
@@ -165,6 +166,11 @@
     }
     type.addEventListener('change', show);
     show();
+    // « Lecture des scans par l'IA » : seulement en texte seul
+    var analyse = document.querySelector('input[name="analyse_light"]'), row = document.getElementById('ocr-ia-row');
+    function ocrRow() { row.hidden = analyse.checked; }
+    analyse.addEventListener('change', ocrRow);
+    ocrRow();
   })();
 </script>
 {% endblock %}

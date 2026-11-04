@@ -125,6 +125,7 @@ class Answer:
     documents: list[DocResult] | None = None  # mode « un résultat par document » : [n] = document n
     identifiers: tuple[str, ...] = ()  # identifiants de la question : seuls les documents qui les contiennent
     identifiers_absent: tuple[str, ...] = ()  # identifiants trouvés dans aucun document : résultats par ressemblance
+    reformulated: str | None = None  # question de suivi rendue autonome (conversation)
 
 
 @dataclass(frozen=True)

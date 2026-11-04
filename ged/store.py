@@ -65,6 +65,8 @@ class Store(Protocol):
     def type_counts(self) -> list[tuple[str, str, int]]: ...
     def strip_light(self, source: str) -> int: ...
     def sample_chunks(self, n: int, source: str | None = None) -> list[dict]: ...
+    def iter_document_chunks(self, source: str | None = None): ...
+    def update_vectors(self, source: str, doc_id: str, vectors: list[tuple[int, list[float]]]) -> None: ...
     def mark_for_analysis(self, source: str) -> int: ...
 
     # --- Recherche par critères (liste exhaustive, filtrée par droits) ---------------
@@ -100,12 +102,32 @@ class Store(Protocol):
     def finish_run(self, run_id: int, status: str, report: dict | None = None, message: str | None = None) -> None: ...
     def list_runs(self, source: str | None = None, limit: int = 20) -> list[SyncRun]: ...
     def interrupt_stale_runs(self) -> int: ...
+    def sync_lock(self, source: str): ...
     def log_question(
         self, groups: frozenset[str], question: str, hits: int, citations: int,
         duration_ms: int, sandbox: bool = False,
     ) -> None: ...
     def question_activity(self, days: int = 14) -> list[tuple[str, int, int]]: ...
     def purge_questions(self, older_than_days: int) -> int: ...
+
+
+class _PgLock:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def release(self) -> None:
+        try:
+            self._conn.close()  # fermer la connexion libère le verrou consultatif
+        except Exception:
+            pass
+
+
+class _MemLock:
+    def __init__(self, lock):
+        self._lock = lock
+
+    def release(self) -> None:
+        self._lock.release()
 
 
 # --------------------------------------------------------------------------------------
@@ -472,18 +494,37 @@ class PgStore:
                 (source, Status.INDEXED))
         return n
 
+    def iter_document_chunks(self, source=None):
+        """(source, doc_id, chemin, type, passages dans l'ordre) de chaque document indexé."""
+        with self._conn() as conn:
+            docs = conn.execute(
+                "SELECT source, doc_id, path, doc_label FROM documents WHERE status = %s "
+                "AND (%s::text IS NULL OR source = %s) ORDER BY source, path", (Status.INDEXED, source, source)).fetchall()
+        for src, doc_id, path, label in docs:
+            with self._conn() as conn:
+                rows = conn.execute("SELECT chunk_no, page, text FROM chunks WHERE source = %s AND doc_id = %s "
+                                    "ORDER BY chunk_no", (src, doc_id)).fetchall()
+            yield src, doc_id, path, label, [Chunk(r[0], r[1], r[2]) for r in rows]
+
+    def update_vectors(self, source, doc_id, vectors):
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.executemany("UPDATE chunks SET embedding = %s::vector WHERE source = %s AND doc_id = %s AND chunk_no = %s",
+                            [(_vec_literal(v), source, doc_id, no) for no, v in vectors])
+
     def sample_chunks(self, n, source=None):
-        """Passages tirés au hasard (un par document au plus), pour générer des questions de test."""
+        """Passages tirés au hasard (3 par document au plus, documents différents d'abord),
+        pour générer des questions de test."""
         from ged.alambic_light import FICHE_CHUNK_NO
 
         sql = f"""
-            SELECT * FROM (
-                SELECT DISTINCT ON (c.source, c.doc_id) c.source, c.doc_id, d.path, c.page, c.text, d.acl_groups
+            SELECT source, doc_id, path, page, text, acl_groups FROM (
+                SELECT c.source, c.doc_id, d.path, c.page, c.text, d.acl_groups,
+                       row_number() OVER (PARTITION BY c.source, c.doc_id ORDER BY random()) AS r
                 FROM chunks c JOIN documents d ON d.source = c.source AND d.doc_id = c.doc_id
                 WHERE d.status = 'indexed' AND c.chunk_no <> {FICHE_CHUNK_NO} AND length(c.text) >= 200
                   AND (%(src)s::text IS NULL OR c.source = %(src)s)
-                ORDER BY c.source, c.doc_id, random()
-            ) t ORDER BY random() LIMIT %(n)s"""
+            ) t WHERE r <= 3   -- 3 passages par document au plus : variété même sur un petit index
+            ORDER BY r, random() LIMIT %(n)s"""
         with self._conn() as conn:
             rows = conn.execute(sql, {"src": source, "n": n}).fetchall()
         return [{"source": r[0], "doc_id": r[1], "path": r[2], "page": r[3], "text": r[4], "groups": list(r[5])}
@@ -705,13 +746,44 @@ class PgStore:
             for r in rows
         ]
 
+    def sync_lock(self, source):
+        """Verrou de synchro d'une source, partagé par TOUTES les instances (Swarm) : verrou
+        consultatif PostgreSQL tenu par une connexion dédiée. Instance arrêtée brutalement →
+        connexion coupée → verrou libéré. Renvoie un objet à `release()`, ou None si pris."""
+        import psycopg
+
+        conn = psycopg.connect(self.dsn, autocommit=True, connect_timeout=10)
+        try:
+            got = conn.execute("SELECT pg_try_advisory_lock(hashtextextended(%s, 0))",
+                               (f"alambic-search:sync:{source}",)).fetchone()[0]
+        except Exception:
+            conn.close()
+            raise
+        if not got:
+            conn.close()
+            return None
+        return _PgLock(conn)
+
     def interrupt_stale_runs(self):
+        """Passages « en cours » dont plus aucune instance ne tient le verrou : interrompus."""
         with self._conn() as conn:
-            cur = conn.execute(
-                "UPDATE sync_runs SET status = %s, finished_at = now(), message = %s WHERE status = %s",
-                (RunStatus.INTERRUPTED, "Service arrêté pendant la synchronisation", RunStatus.RUNNING),
-            )
-            return cur.rowcount
+            running = conn.execute("SELECT id, source FROM sync_runs WHERE status = %s",
+                                   (RunStatus.RUNNING,)).fetchall()
+        n = 0
+        for run_id, source in running:
+            lock = self.sync_lock(source)
+            if lock is None:  # une autre instance synchronise cette source en ce moment
+                continue
+            try:
+                with self._conn() as conn:
+                    conn.execute("UPDATE sync_runs SET status = %s, finished_at = now(), message = %s "
+                                 "WHERE id = %s AND status = %s",
+                                 (RunStatus.INTERRUPTED, "Service arrêté pendant la synchronisation", run_id,
+                                  RunStatus.RUNNING))
+                n += 1
+            finally:
+                lock.release()
+        return n
 
     def log_question(self, groups, question, hits, citations, duration_ms, sandbox=False):
         with self._conn() as conn:
@@ -757,6 +829,7 @@ class MemoryStore:
         self.questions: list[dict] = []
         self.source_configs: dict[str, dict] = {}
         self.source_secrets: dict[tuple[str, str], str] = {}
+        self._sync_locks: dict[str, threading.Lock] = {}
         self.settings: dict = {}
         self._lock = threading.Lock()  # les synchros tournent dans des threads
 
@@ -824,6 +897,19 @@ class MemoryStore:
                 self._reset(key)
         return n
 
+    def iter_document_chunks(self, source=None):
+        for (src, doc_id), d in sorted(self.docs.items(), key=lambda kv: (kv[0][0], kv[1]["state"].path)):
+            if d["status"] != Status.INDEXED or (source and src != source):
+                continue
+            label = d["meta"].label if d.get("meta") else None
+            yield src, doc_id, d["state"].path, label, sorted((c for c, _ in self.chunks.get((src, doc_id), [])),
+                                                              key=lambda c: c.chunk_no)
+
+    def update_vectors(self, source, doc_id, vectors):
+        new = dict(vectors)
+        key = (source, doc_id)
+        self.chunks[key] = [(c, new.get(c.chunk_no, v)) for c, v in self.chunks.get(key, [])]
+
     def sample_chunks(self, n, source=None):
         import random
 
@@ -835,12 +921,11 @@ class MemoryStore:
                 continue
             chunks = [c for c, _ in self.chunks.get((src, doc_id), []) if c.chunk_no != FICHE_CHUNK_NO
                       and len(c.text) >= 200]
-            if chunks:
-                c = random.choice(chunks)
-                out.append({"source": src, "doc_id": doc_id, "path": d["state"].path, "page": c.page, "text": c.text,
-                            "groups": sorted(d["state"].acl.allow)})
-        random.shuffle(out)
-        return out[:n]
+            for r, c in enumerate(random.sample(chunks, min(3, len(chunks)))):
+                out.append((r, random.random(), {"source": src, "doc_id": doc_id, "path": d["state"].path,
+                                                 "page": c.page, "text": c.text, "groups": sorted(d["state"].acl.allow)}))
+        out.sort(key=lambda t: (t[0], t[1]))  # documents différents d'abord
+        return [x for _, _, x in out[:n]]
 
     def mark_for_analysis(self, source):
         n = 0
@@ -1038,6 +1123,10 @@ class MemoryStore:
     def list_runs(self, source=None, limit=20):
         runs = [r for r in reversed(self.runs) if not source or r.source == source]
         return runs[:limit]
+
+    def sync_lock(self, source):
+        lock = self._sync_locks.setdefault(source, threading.Lock())
+        return _MemLock(lock) if lock.acquire(blocking=False) else None
 
     def interrupt_stale_runs(self):
         n = 0

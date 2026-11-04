@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 
 from ged.alambic_light import FICHE_CHUNK_NO, AlambicLight, LightRejected, fiche_text
-from ged.chunking import chunk_pages
+from ged.chunking import chunk_pages, embedding_inputs
 from ged.connectors.base import Connector
 from ged.convert import OfficeConverter
 from ged.embeddings import Embedder
@@ -95,13 +95,14 @@ class Progress:
 
 class _Indexer:
     def __init__(self, connector, store, embedder, analyzer, report, max_chars, overlap, converter=None,
-                 analyse: bool = True):
+                 analyse: bool = True, ocr_ia: bool = False):
         self.converter: OfficeConverter | None = converter
         self.connector = connector
         self.store = store
         self.embedder = embedder
         self.analyzer: AlambicLight | None = analyzer
         self.analyse = analyse  # False : source « texte seul », Alambic Light ne sert qu'à l'OCR des scans
+        self.ocr_ia = ocr_ia  # texte seul : lecture des scans par l'IA (ocr=ia)
         self.report = report
         self.max_chars = max_chars
         self.overlap = overlap
@@ -145,7 +146,7 @@ class _Indexer:
             if not has_text(pages) and self.analyzer.accepts(name):
                 try:
                     ocr_pages, error = self.analyzer.ocr(
-                        data, name, source=f"alambic-search:{ref.source}", identifiant=ref.path)
+                        data, name, source=f"alambic-search:{ref.source}", identifiant=ref.path, ia_ocr=self.ocr_ia)
                 except LightRejected as exc:
                     log.info("Alambic Light refuse %s : %s", ref.path, exc)
                     ocr_pages, error = None, None
@@ -181,7 +182,7 @@ class _Indexer:
             self.count("ocr_required")
             return
 
-        vectors = self.embedder.embed([c.text for c in chunks])
+        vectors = self.embedder.embed(embedding_inputs(ref.path, meta.label if meta else None, [c.text for c in chunks]))
         self.store.upsert_document(ref, content_hash, acl, Status.INDEXED, chunks, vectors, error=note, meta=meta)
         self.count("updated" if prev else "added")
 
@@ -219,7 +220,9 @@ def refresh_review(store: Store, embedder: Embedder, analyzer: AlambicLight, sou
     if new == meta:
         return None
     fiche = fiche_text(new)
-    vector = embedder.embed([fiche])[0] if fiche else None
+    state = store.get_document(source, doc_id)
+    path = state.path if state is not None else doc_id
+    vector = embedder.embed(embedding_inputs(path, new.label, [fiche]))[0] if fiche else None
     store.update_meta(source, doc_id, new, fiche, vector)
     return new
 
@@ -254,18 +257,21 @@ def sync_source(
     max_delete_ratio: float = 0.5,
     progress: Progress | None = None,
     analyse: bool | None = None,
+    ocr_ia: bool | None = None,
 ) -> SyncReport:
     """`analyse` : type et données par Alambic Light (défaut : réglage de la source, analyse_light).
     False : texte seul, Alambic Light ne sert qu'à l'OCR des scans (ocr_only)."""
     report = SyncReport()
     if analyse is None:
         analyse = getattr(connector, "analyse_light", True)
+    if ocr_ia is None:
+        ocr_ia = getattr(connector, "ocr_ia", False)
     if analyzer is not None:
         _apply_analysis_mode(store, connector.name, analyse)
     progress = progress or Progress()
     known = store.get_state(connector.name)
     seen: set[str] = set()
-    ix = _Indexer(connector, store, embedder, analyzer, report, max_chars, overlap, converter, analyse)
+    ix = _Indexer(connector, store, embedder, analyzer, report, max_chars, overlap, converter, analyse, ocr_ia)
 
     workers = analyzer.concurrency if analyzer else 1
     slots = threading.BoundedSemaphore(workers * 2)  # fichiers lus en attente d'analyse : mémoire bornée
@@ -335,3 +341,18 @@ def sync_source(
         store.delete_document(connector.name, doc_id)
         report.deleted += 1
     return report
+
+
+def reembed(store: Store, embedder: Embedder, source: str | None = None, progress=None) -> int:
+    """Recalcule les vecteurs des passages déjà indexés (contexte : document, type, section),
+    sans relire les fichiers ni rappeler Alambic Light. Renvoie le nombre de documents traités."""
+    n = 0
+    for src, doc_id, path, label, chunks in store.iter_document_chunks(source):
+        if not chunks:
+            continue
+        vectors = embedder.embed(embedding_inputs(path, label, [c.text for c in chunks]))
+        store.update_vectors(src, doc_id, [(c.chunk_no, v) for c, v in zip(chunks, vectors, strict=True)])
+        n += 1
+        if progress:
+            progress(n, path)
+    return n

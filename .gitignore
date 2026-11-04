@@ -9,3 +9,8 @@ dist/
 # Évaluation : mesures et brouillons locaux (eval/reference.json et eval/jeu.yaml, eux, se versionnent)
 eval/derniere.json
 eval/candidates.yaml
+# Modèles téléchargés (make rerank-modele)
+models/
+# Déploiement Swarm : réglages propres à chaque client
+deploy/swarm/stack.env
+deploy/swarm/sources.yaml

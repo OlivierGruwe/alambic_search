@@ -85,6 +85,7 @@ def tag(connector, cfg: dict):
     """Réglages de synchro portés par le connecteur (lus par sync_source)."""
     try:
         connector.analyse_light = cfg.get("analyse_light", True)
+        connector.ocr_ia = cfg.get("ocr_ia", False)
     except AttributeError:  # objet sans attributs libres : réglage par défaut
         pass
     return connector

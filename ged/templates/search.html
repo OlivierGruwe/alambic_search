@@ -3,7 +3,7 @@
 {% from "_macros.html" import label, help %}
 {% block content %}
 <section class="section">
-  <form class="sandbox-form" hx-post="/rechercher" hx-target="#result" hx-indicator="#wait" hx-disabled-elt="find button[type=submit]">
+  <form class="sandbox-form" id="search-form" hx-post="/rechercher" hx-target="#result" hx-indicator="#wait" hx-disabled-elt="find button[type=submit]">
     <div class="field wide" role="tablist" aria-label="Type de recherche">
       <div class="seg">
         <button type="button" role="tab" aria-selected="true" data-mode="question">Poser une question</button>
@@ -47,6 +47,12 @@
       document.getElementById('result').innerHTML = '';
       document.getElementById(mode === 'question' ? 'q' : 'v').focus();
     });
+  });
+  // « Nouvelle conversation » : oublie les échanges précédents (champ caché dans le résultat)
+  document.getElementById('result').addEventListener('click', function (e) {
+    if (!e.target.closest('[data-new-conversation]')) return;
+    document.getElementById('result').innerHTML = '';
+    var q = document.getElementById('q'); q.value = ''; q.focus();
   });
   // Entrée envoie la question (Maj+Entrée : retour à la ligne)
   document.getElementById('q').addEventListener('keydown', function (e) {

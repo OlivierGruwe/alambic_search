@@ -63,6 +63,7 @@ class CaseResult:
     id: str
     question: str
     rang: int | None = None  # rang du premier document attendu (1 = premier), None = pas trouvé
+    rang_etendu: int | None = None  # non trouvé dans les k premiers : son rang parmi 50 (None : au-delà)
     trouve: bool | None = None  # un document attendu parmi les k premiers
     page_ok: bool | None = None  # la page attendue fait partie des pages trouvées du document
     fuites: list[str] = field(default_factory=list)  # documents interdits retrouvés
@@ -135,7 +136,10 @@ _REFUSAL = re.compile(
 
 # --- Mesure ---------------------------------------------------------------------------------
 
-def run_case(case: Case, principals: frozenset[str], store, embedder, llm, *, with_answers: bool) -> CaseResult:
+EXTENDED = 50  # profondeur du diagnostic des documents non retrouvés
+
+def run_case(case: Case, principals: frozenset[str], store, embedder, llm, *, with_answers: bool,
+             reranker=None) -> CaseResult:
     from ged.answer import NO_RESULT, ask
 
     res = CaseResult(case.id, case.question)
@@ -143,7 +147,7 @@ def run_case(case: Case, principals: frozenset[str], store, embedder, llm, *, wi
     t0 = time.perf_counter()
     # Recherche : documents classés comme les verrait l'utilisateur (un résultat par document)
     found = ask(case.question, principals, store, embedder, None, k=case.k, generate=False, doc_types=types,
-                per_document=True)
+                per_document=True, reranker=reranker)
     docs = found.documents or []
     res.retrouves = [f"{d.source}:{d.path}" for d in docs]
     res.fuites = [f"{d.source}:{d.path}" for d in docs if any(matches(x, d.source, d.path) for x in case.interdits)]
@@ -155,9 +159,14 @@ def run_case(case: Case, principals: frozenset[str], store, embedder, llm, *, wi
                     res.page_ok = any(p in case.pages for p, _ in d.pages)
                 break
         res.trouve = res.rang is not None
+        if not res.trouve:  # diagnostic : mal classé (rang 14) ou jamais retrouvé (au-delà de 50) ?
+            wide = ask(case.question, principals, store, embedder, None, k=EXTENDED, generate=False,
+                       doc_types=types, per_document=True, reranker=reranker)
+            res.rang_etendu = next((d.n for d in wide.documents or []
+                                    if any(matches(x, d.source, d.path) for x in case.documents)), None)
     # Réponse rédigée
     if with_answers and llm is not None:
-        answer = ask(case.question, principals, store, embedder, llm, k=case.k, doc_types=types)
+        answer = ask(case.question, principals, store, embedder, llm, k=case.k, doc_types=types, reranker=reranker)
         res.reponse = answer.text
         cited = [(c.source, c.path) for c in answer.citations]
         res.fuites += [f"{s}:{p}" for s, p in cited if any(matches(x, s, p) for x in case.interdits)
@@ -175,20 +184,21 @@ def run_case(case: Case, principals: frozenset[str], store, embedder, llm, *, wi
 
 
 def evaluate(cases: list[Case], store, embedder, llm=None, identity=None, *, with_answers: bool = False,
-             progress=None) -> dict:
+             progress=None, reranker=None) -> dict:
     from ged.api import resolve_principals
 
     results = []
     for i, case in enumerate(cases, 1):
         try:
             principals = resolve_principals(identity, case.utilisateur, ",".join(case.groupes))
-            res = run_case(case, principals, store, embedder, llm, with_answers=with_answers)
+            res = run_case(case, principals, store, embedder, llm, with_answers=with_answers, reranker=reranker)
         except Exception as exc:  # une question en échec n'arrête pas la mesure
             res = CaseResult(case.id, case.question, erreur=f"{type(exc).__name__} : {exc}")
         results.append(res)
         if progress:
             progress(i, len(cases), res)
     return {"le": time.strftime("%Y-%m-%dT%H:%M:%S"), "reponses": with_answers and llm is not None,
+            "reclassement": reranker.describe() if reranker is not None else None,
             "resume": summary(results), "questions": [asdict(r) for r in results]}
 
 
@@ -266,8 +276,9 @@ def format_report(result: dict, comparison: dict | None = None) -> str:
                  + ("  ← À CORRIGER" if s["fuites"] else ""))
     missed = [q for q in result["questions"] if q.get("trouve") is False]
     if missed:
-        lines.append("\nNon retrouvés :")
-        lines += [f"  - {q['id']} : {q['question'][:80]}" for q in missed]
+        lines.append("\nNon retrouvés (rang réel : mal classé si ≤ 50, sinon jamais retrouvé) :")
+        lines += [f"  - {q['id']} [{'rang ' + str(q['rang_etendu']) if q.get('rang_etendu') else 'au-delà de 50'}] : "
+                  f"{q['question'][:80]}" for q in missed]
     leaks = [q for q in result["questions"] if q.get("fuites")]
     if leaks:
         lines.append("\nFUITES :")
@@ -293,29 +304,97 @@ def save(result: dict, path: str | Path) -> None:
 # --- Questions candidates (brouillon à relire) ---------------------------------------------
 
 GENERATE_PROMPT = """On construit un jeu de questions pour tester un moteur de recherche documentaire.
+La question doit porter sur ce qui est PROPRE à ce document (un montant, une date, une condition,
+une décision), pas sur un texte type qu'on retrouve partout (notice, mentions légales).
 À partir du passage fourni, écris UNE question précise qu'un employé pourrait poser et à
-laquelle ce passage répond. La question ne cite pas le nom du fichier. Évite les questions
-vagues (« que dit ce document ? »). Donne aussi la réponse, en quelques mots recopiés du passage.
+laquelle ce passage répond. L'employé ne voit PAS le passage : la question doit se comprendre
+seule et nommer ce dont elle parle (la personne, la société, le type de document, le numéro).
+Interdit : « ce document », « ce passage », « selon le passage », « la personne mentionnée »,
+« ci-dessus ». La question ne cite pas le nom du fichier. Évite les questions vagues.
+Donne aussi la réponse, en quelques mots recopiés du passage.
 Réponds UNIQUEMENT par un objet JSON : {"question": "...", "reponse": "..."}
 Si le passage ne contient rien d'exploitable (sommaire, mentions légales, texte illisible),
 réponds {"question": null}."""
 
 
-def generate_candidates(store, llm, n: int = 30, source: str | None = None) -> list[dict]:
+# Questions qui renvoient au passage (« ce document », « selon le passage ») : intestables
+_DEICTIC = re.compile(r"\b(ce|cet|cette|ces) (document|passage|texte|extrait|courrier|fichier)\b|selon le passage|"
+                      r"\b(mentionnée?s?|citée?s?|indiquée?s?) (dans|ci)|ci-dessus|ci-dessous", re.IGNORECASE)
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"\w{3,}", normalize(text)))
+
+
+def equivalent_documents(store, embedder, passage: dict, threshold: float = 0.6) -> list[str]:
+    """Autres documents qui contiennent (presque) le même passage — copies, modèles identiques,
+    notices communes à plusieurs passeports… : tous sont des réponses valables."""
+    if embedder is None:
+        return []
+    words = _words(passage["text"])
+    hits = store.search(passage["text"][:1000], embedder.embed([passage["text"][:2000]])[0],
+                        frozenset(passage["groups"]), k=30)
     out = []
-    for c in store.sample_chunks(n * 2, source=source):  # le double : certains passages sont inexploitables
+    for h in hits:
+        if (h.source, h.doc_id) == (passage["source"], passage["doc_id"]):
+            continue
+        other = _words(h.text)
+        if words and other and len(words & other) / len(words | other) >= threshold:
+            ref = f"{h.source}:{h.path}"
+            if ref not in out:
+                out.append(ref)
+    return out
+
+
+MAX_EQUIVALENTS = 3  # passage présent dans plus de documents : texte type (notice, modèle), question sans intérêt
+
+
+def generate_candidates(store, llm, n: int = 30, source: str | None = None, embedder=None,
+                        stats: dict | None = None) -> list[dict]:
+    """Questions candidates variées : un document (ou groupe de copies) ne sert qu'une fois,
+    les textes types communs à beaucoup de documents et les doublons de question sont écartés."""
+    out, covered, asked = [], set(), set()
+    stats = stats if stats is not None else {}
+    for key in ("copies", "texte_type", "doublon", "renvoi", "inexploitable"):
+        stats.setdefault(key, 0)
+    for c in store.sample_chunks(n * 4, source=source):  # large : beaucoup de passages sont écartés
         if len(out) >= n:
             break
+        ref = f"{c['source']}:{c['path']}"
+        if not c["groups"]:  # document lisible par personne : question intestable
+            continue
+        if ref in covered:  # document (ou une de ses copies) déjà interrogé
+            stats["copies"] += 1
+            continue
+        try:
+            same = equivalent_documents(store, embedder, c)
+        except Exception:
+            same = []
+        if len(same) > MAX_EQUIVALENTS:
+            covered.update([ref, *same])
+            stats["texte_type"] += 1
+            continue
         try:
             raw = llm.complete(GENERATE_PROMPT, f"Passage (fichier {c['path']}, page {c['page']}) :\n\n{c['text'][:2500]}")
             found = re.search(r"\{.*\}", raw, re.DOTALL)
             data = json.loads(found.group(0)) if found else {}
         except Exception:
+            stats["inexploitable"] += 1
             continue
         question = str(data.get("question") or "").strip()
         if len(question) < 10:
+            stats["inexploitable"] += 1
             continue
-        item = {"id": f"gen-{len(out) + 1:03d}", "question": question, "documents": [f"{c['source']}:{c['path']}"],
+        if _DEICTIC.search(question):
+            stats["renvoi"] += 1
+            continue
+        key = " ".join(sorted(_words(question)))
+        if key in asked:
+            stats["doublon"] += 1
+            continue
+        asked.add(key)
+        covered.update([ref, *same])
+        item = {"id": f"gen-{len(out) + 1:03d}", "question": question, "documents": [ref, *same],
                 "pages": [c["page"]], "groupes": sorted(c["groups"])[:5]}
         answer = str(data.get("reponse") or "").strip()
         if answer:

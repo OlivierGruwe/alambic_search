@@ -1,0 +1,303 @@
+# Alambic Search — stack Docker Swarm (production).
+#
+#   docker stack deploy -c deploy/swarm/stack.yml --with-registry-auth search
+#   (ou : make stack-deploy, qui charge deploy/swarm/stack.env)
+#
+# Variables (stack.env) : REGISTRY, TAG, SEARCH_HOST, SSO_HOST, LIGHT_URL, ACME_EMAIL.
+# Secrets à créer AVANT le premier déploiement : deploy/swarm/secrets.sh.
+# Étiquettes de nœuds : alambic.db=true (base), alambic.gpu=true (modèles), alambic.edge=true (entrée).
+# Procédures : docs « Alambic Search — Dossier d'architecture et d'exploitation », onglet Exploitation.
+
+x-search-env: &search-env
+  DATABASE_URL: postgresql://ged@db:5432/ged
+  DATABASE_PASSWORD_FILE: /run/secrets/search_db_password
+  ADMIN_PASSWORD_FILE: /run/secrets/search_admin_password
+  SESSION_SECRET_FILE: /run/secrets/search_session_secret
+  SECRETS_KEY_FILE: /run/secrets/search_secrets_key
+  SECRETS_KEY_PREVIOUS_FILE: /run/secrets/search_secrets_key_previous
+  OIDC_CLIENT_SECRET_FILE: /run/secrets/search_oidc_client_secret
+  ALAMBIC_LIGHT_API_KEY_FILE: /run/secrets/search_light_api_key
+  COOKIE_SECURE: "true"
+  FORWARDED_ALLOW_IPS: "*"            # en-têtes X-Forwarded-* de Caddy (réseau interne seulement)
+  SOURCES_FILE: /config/sources.yaml
+  EMBED_BASE_URL: http://ollama:11434/v1
+  LLM_BASE_URL: http://ollama:11434/v1
+  LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
+  CONVERT_URL: http://gotenberg:3000
+  RERANK_URL: ${RERANK_URL:-http://rerank:80}
+  OIDC_INTERNAL_URL: http://keycloak:8080/realms/alambic
+  CLIENT_NAME: ${CLIENT_NAME:-}
+
+x-search-secrets: &search-secrets
+  - search_db_password
+  - search_admin_password
+  - search_session_secret
+  - search_secrets_key
+  - search_secrets_key_previous
+  - search_oidc_client_secret
+  - search_light_api_key
+
+x-healthcheck: &api-health
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+  interval: 15s
+  timeout: 5s
+  retries: 3
+  start_period: 60s
+
+services:
+  # Entrée HTTPS (certificats Let's Encrypt automatiques), seul service publié.
+  caddy:
+    image: caddy:2.8
+    ports:
+      - target: 443
+        published: 443
+        mode: host                    # garde l'adresse IP réelle des clients (journaux, anti-force brute)
+      - target: 80
+        published: 80
+        mode: host
+    environment:
+      SEARCH_HOST: ${SEARCH_HOST}
+      SSO_HOST: ${SSO_HOST}
+      ACME_EMAIL: ${ACME_EMAIL}
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      - caddy_data:/data
+    networks: [edge]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.alambic.edge == true]
+      update_config: {order: stop-first}
+      restart_policy: {condition: any, delay: 5s}
+
+  # Application web : console, recherche, API. Sans état : autant d'instances que voulu.
+  api:
+    image: ${REGISTRY}/alambic-search:${TAG}
+    environment:
+      <<: *search-env
+      SCHEDULER_ENABLED: "false"      # les synchros planifiées tournent dans « worker »
+    secrets: *search-secrets
+    configs:
+      - source: sources
+        target: /config/sources.yaml
+    networks: [edge, backend, alambic]
+    healthcheck: *api-health
+    deploy:
+      replicas: 2
+      placement:
+        max_replicas_per_node: 1
+        constraints: [node.role == worker]
+      resources:
+        limits: {cpus: "2", memory: 2G}
+        reservations: {memory: 512M}
+      update_config: {parallelism: 1, delay: 10s, order: start-first, failure_action: rollback, monitor: 60s}
+      rollback_config: {parallelism: 1, order: start-first}
+      restart_policy: {condition: any, delay: 5s, max_attempts: 10, window: 120s}
+
+  # Synchronisations planifiées (même image, pas d'accès public). Un verrou PostgreSQL par
+  # source garantit qu'une source n'est jamais synchronisée deux fois en même temps.
+  worker:
+    image: ${REGISTRY}/alambic-search:${TAG}
+    environment:
+      <<: *search-env
+      SCHEDULER_ENABLED: "true"
+    secrets: *search-secrets
+    configs:
+      - source: sources
+        target: /config/sources.yaml
+    networks: [backend, alambic]
+    healthcheck: *api-health
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == worker]
+      resources:
+        limits: {cpus: "4", memory: 4G}
+      update_config: {order: stop-first, failure_action: rollback, monitor: 60s}
+      restart_policy: {condition: any, delay: 10s}
+
+  # PostgreSQL 16 + pgvector : index, sources, secrets chiffrés, historique ; base « keycloak » aussi.
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ged
+      POSTGRES_DB: ged
+      POSTGRES_PASSWORD_FILE: /run/secrets/search_db_password
+      RESTORE_ON_EMPTY: "true"        # base vide au démarrage : rechargée depuis la dernière sauvegarde
+    secrets: [search_db_password]
+    configs:
+      - source: db_init
+        target: /docker-entrypoint-initdb.d/10-init-restore.sh
+        mode: 0555
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - backups:/backups:ro           # sauvegardes lues pour le rechargement automatique
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ged -d ged"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.alambic.db == true]   # le volume est local à ce nœud
+      resources:
+        limits: {memory: 4G}
+      update_config: {order: stop-first}
+      restart_policy: {condition: any, delay: 5s}
+
+  # Sauvegarde quotidienne (pg_dump des bases ged et keycloak), sur le nœud de la base.
+  backup:
+    image: pgvector/pgvector:pg16
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      PGHOST: db
+      PGUSER: ged
+      PGPASSFILE_SECRET: /run/secrets/search_db_password
+      BACKUP_HOUR: "02"
+      BACKUP_KEEP_DAYS: "14"
+    secrets: [search_db_password]
+    configs:
+      - source: backup_script
+        target: /backup.sh
+        mode: 0555
+    volumes:
+      - backups:/backups
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.alambic.db == true]
+      restart_policy: {condition: any, delay: 30s}
+
+  # Vecteurs (bge-m3) et LLM (qwen2.5:7b), sur un nœud à carte NVIDIA.
+  ollama:
+    image: ollama/ollama:${OLLAMA_TAG:-0.12.6}   # version figée : vérifier la dernière avant de monter
+    volumes:
+      - ollama:/root/.ollama
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.alambic.gpu == true]
+      resources:
+        reservations:
+          generic_resources:
+            - discrete_resource_spec: {kind: NVIDIA-GPU, value: 1}
+      restart_policy: {condition: any, delay: 5s}
+
+  # Reclassement des résultats (bge-reranker-v2-m3). CPU par défaut ; GPU : RERANK_IMAGE …:1.8.
+  rerank:
+    image: ${RERANK_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.8}
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--max-client-batch-size", "64"]
+    volumes:
+      - rerank:/data
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.alambic.gpu == true]
+      resources:
+        limits: {memory: 6G}
+      restart_policy: {condition: any, delay: 10s}
+
+  # Conversion des fichiers bureautiques en PDF (vraies pages).
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    networks: [backend]
+    deploy:
+      replicas: 2
+      placement:
+        constraints: [node.role == worker]
+      resources:
+        limits: {cpus: "2", memory: 2G}
+      restart_policy: {condition: any, delay: 5s}
+
+  # Connexion unique (OIDC) pour Alambic Search, Alambic Light et le portail. Mode production :
+  # base PostgreSQL « keycloak », derrière Caddy (HTTPS), royaume importé au premier démarrage.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db:5432/keycloak
+      KC_DB_USERNAME: ged
+      KC_DB_PASSWORD_FILE: /run/secrets/search_db_password
+      KC_HOSTNAME: https://${SSO_HOST}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"   # appels serveur à serveur sur keycloak:8080
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
+    entrypoint: ["/bin/sh", "-c", "export KC_DB_PASSWORD=$$(cat $$KC_DB_PASSWORD_FILE) KC_BOOTSTRAP_ADMIN_PASSWORD=$$(cat $$KC_BOOTSTRAP_ADMIN_PASSWORD_FILE); exec /opt/keycloak/bin/kc.sh \"$$@\"", "--"]
+    secrets: [search_db_password, keycloak_admin_password]
+    configs:
+      - source: realm
+        target: /opt/keycloak/data/import/realm-alambic.json
+    networks: [edge, backend, alambic]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == worker]
+      resources:
+        limits: {memory: 1536M}
+      update_config: {order: stop-first}
+      restart_policy: {condition: any, delay: 10s}
+
+networks:
+  edge:                               # Caddy ↔ api, keycloak
+    driver: overlay
+  backend:                            # services internes, chiffré entre les nœuds (IPsec)
+    driver: overlay
+    driver_opts: {encrypted: "true"}
+  alambic:                            # partagé avec la stack d'Alambic Light (créé une fois, voir secrets.sh)
+    external: true
+    name: alambic
+
+volumes:
+  pgdata:
+  # Sauvegardes : local par défaut. Pour qu'elles survivent à la perte du nœud base, les mettre sur
+  # un partage NFS (BACKUP_NFS_ADDR=serveur, BACKUP_NFS_PATH=/export/alambic-search) — voir stack.env.
+  backups:
+    driver: local
+    driver_opts:
+      type: "${BACKUP_FS_TYPE:-none}"
+      o: "${BACKUP_FS_OPTS:-bind}"
+      device: "${BACKUP_DEVICE:-/srv/alambic-search/backups}"
+  ollama:
+  rerank:
+  caddy_data:
+
+# Secrets : immuables dans Docker. Rotation = nouveau secret versionné (ex. search_session_secret_v2),
+# désigné ici par sa variable dans stack.env, puis make stack-deploy (voir onglet Exploitation).
+secrets:
+  search_db_password: {external: true, name: "${DB_PASSWORD_SECRET:-search_db_password}"}
+  search_admin_password: {external: true, name: "${ADMIN_PASSWORD_SECRET:-search_admin_password}"}
+  search_session_secret: {external: true, name: "${SESSION_SECRET_SECRET:-search_session_secret}"}
+  search_secrets_key: {external: true, name: "${SECRETS_KEY_SECRET:-search_secrets_key}"}
+  # ancienne clé, le temps d'une rotation (par défaut : la clé courante, sans effet)
+  search_secrets_key_previous: {external: true, name: "${SECRETS_KEY_PREVIOUS_SECRET:-search_secrets_key}"}
+  search_oidc_client_secret: {external: true, name: "${OIDC_CLIENT_SECRET_SECRET:-search_oidc_client_secret}"}
+  search_light_api_key: {external: true, name: "${LIGHT_API_KEY_SECRET:-search_light_api_key}"}
+  keycloak_admin_password: {external: true, name: "${KEYCLOAK_ADMIN_PASSWORD_SECRET:-keycloak_admin_password}"}
+
+configs:
+  caddyfile:
+    file: ./Caddyfile
+    name: search_caddyfile_${CONFIG_VERSION:-1}
+  sources:
+    file: ./sources.yaml                # copie adaptée de sources.example.yaml (non versionnée)
+    name: search_sources_${CONFIG_VERSION:-1}
+  db_init:
+    file: ./db-init.sh
+    name: search_db_init_${CONFIG_VERSION:-1}
+  backup_script:
+    file: ./backup.sh
+    name: search_backup_${CONFIG_VERSION:-1}
+  realm:
+    file: ../../keycloak/realm-alambic.json
+    name: search_realm_${CONFIG_VERSION:-1}

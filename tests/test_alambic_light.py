@@ -16,6 +16,7 @@ from ged.answer import ask, build_context
 from ged.config import ConfigError, load_analyzer, load_connectors
 from ged.connectors import FileSystemConnector
 from ged.models import DocMeta, Status
+from ged.store import MemoryStore
 from ged.sync import NO_TEXT, sync_source
 
 from .conftest import ACL, make_pdf
@@ -104,7 +105,8 @@ class FakeLight:
             form = {k: body.split(f'name="{k}"', 1)[1].split("\r\n\r\n", 1)[1].split("\r\n", 1)[0]
                     for k in ("source", "identifiant")}
             self.received.append({"filename": filename, **form, "ia": request.url.params.get("ia"),
-                                  "ocr_only": request.url.params.get("ocr_only")})
+                                  "ocr_only": request.url.params.get("ocr_only"),
+                                  "ocr": request.url.params.get("ocr")})
             uid = f"uuid-{len(self.docs) + 1}"
             self.docs[uid] = {"uuid": uid, **self.decide(filename, form)}
             self.polls[uid] = self.pending_polls
@@ -670,3 +672,36 @@ def test_text_only_setting_in_console(share, store, embedder):
     assert "analyse_light: false" in http.get("/admin/sources/export", auth=("admin", "pw")).text
     http.post("/admin/sources/compta/modifier", data={**data, "analyse_light": "true"}, auth=("admin", "pw"))
     assert "analyse_light" not in store.list_source_configs()[0] and app_connectors["compta"].analyse_light is True
+
+
+def test_text_only_source_can_ask_ai_ocr(scans, store, embedder):
+    fake = FakeLight()
+    connector = FileSystemConnector("partage", scans, ACL)
+    sync_source(connector, store, embedder, analyzer=client(fake), analyse=False)
+    assert {r["ocr"] for r in fake.received} == {None}  # moteur par défaut d'Alambic Light
+
+    fake2 = FakeLight()
+    connector.analyse_light, connector.ocr_ia = False, True  # réglages de la source (console)
+    sync_source(connector, MemoryStore(), embedder, analyzer=client(fake2))
+    assert fake2.received and all(r["ocr_only"] == "true" and r["ocr"] == "ia" for r in fake2.received)
+
+
+def test_ai_ocr_setting_in_console(share, store, embedder):
+    from fastapi.testclient import TestClient
+
+    from ged.api import create_app
+
+    http = TestClient(create_app(store, embedder, None, {}, admin_password="pw", analyzer=client(FakeLight())),
+                      follow_redirects=False)
+    auth = ("admin", "pw")
+    assert 'name="ocr_ia"' in http.get("/admin/sources/nouvelle", auth=auth).text
+    data = {"name": "scans", "type": "filesystem", "root": str(share / "Compta"), "acl": "(racine) = compta",
+            "analyse_light_field": "1", "ocr_ia": "true"}
+    assert http.post("/admin/sources/nouvelle", data=data, auth=auth).status_code == 303
+    cfg = store.list_source_configs()[0]
+    assert cfg["analyse_light"] is False and cfg["ocr_ia"] is True
+    assert http.app.state.catalog.connectors["scans"].ocr_ia is True
+    assert "Texte seul (OCR des scans par l'IA)" in http.get("/admin/sources", auth=auth).text
+    assert "ocr_ia: true" in http.get("/admin/sources/export", auth=auth).text
+    http.post("/admin/sources/scans/modifier", data={**data, "ocr_ia": ""}, auth=auth)
+    assert "ocr_ia" not in store.list_source_configs()[0]

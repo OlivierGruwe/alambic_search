@@ -34,7 +34,9 @@
 {% endif %}
 {% elif answer %}
 {% set cited = answer.citations|map(attribute='n')|list %}
+{% if historique %}<input type="hidden" name="historique" form="search-form" value="{{ historique }}">{% endif %}
 <section class="section" aria-labelledby="ans-title">
+  {% if answer.reformulated %}<p class="hint conv-note">Question comprise, d'après l'échange précédent : « {{ answer.reformulated }} »</p>{% endif %}
   {% if answer.generated %}
   <h2 id="ans-title">Réponse</h2>
   <div class="answer">{{ answer.text|cites(cited) }}</div>
@@ -68,6 +70,12 @@
       {% if not answer.generated %}<p class="excerpt">{{ h.text|truncate(700) }}</p>{% endif %}</div></li>
     {% endfor %}
   </ol>
+  {% endif %}
+  {% if historique and has_llm %}
+  <div class="conv-actions">
+    <span class="hint">Vous pouvez poser une question de suite (« et pour Durand ? », « quel montant ? »).</span>
+    <button type="button" class="btn secondary" data-new-conversation>Nouvelle conversation</button>
+  </div>
   {% endif %}
 </section>
 {% endif %}

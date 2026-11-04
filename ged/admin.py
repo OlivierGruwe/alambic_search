@@ -21,9 +21,10 @@ log = logging.getLogger(__name__)
 
 class SyncManager:
     def __init__(self, store: Store, embedder: Embedder, connectors: dict, analyzer=None, converter=None,
-                 schedule: dict[str, float] | None = None, clock=time.time):
+                 schedule: dict[str, float] | None = None, clock=time.time, auto_sync_empty: bool = False):
         self.schedule = {k: v for k, v in (schedule or {}).items() if k in connectors and v and v > 0}
         self._clock = clock
+        self.auto_sync_empty = auto_sync_empty  # instance qui planifie : index vide → tout synchroniser
         self._stop = threading.Event()
         self._scheduler: threading.Thread | None = None
         self.converter = converter  # conversion PDF des fichiers bureautiques, ou None
@@ -52,10 +53,14 @@ class SyncManager:
         with self._guard:
             if self.is_running(source):
                 return None
+            lock = self.store.sync_lock(source)  # partagé entre instances (Swarm)
+            if lock is None:
+                log.info("Synchronisation de %s déjà en cours sur une autre instance", source)
+                return None
             run_id = self.store.start_run(source)
             self._progress[source] = Progress()
             t = threading.Thread(
-                target=self._run, args=(source, run_id, max_delete_ratio), name=f"sync-{source}", daemon=True
+                target=self._run, args=(source, run_id, max_delete_ratio, lock), name=f"sync-{source}", daemon=True
             )
             self._threads[source] = t
             t.start()
@@ -82,9 +87,24 @@ class SyncManager:
                     started.append(source)
         return started
 
+    def sync_if_empty(self) -> list[str]:
+        """Base vide (nouvelle installation, ou perdue sans sauvegarde) : aucun document, aucune
+        synchronisation jamais faite → toutes les sources sont synchronisées. Renvoie celles lancées."""
+        if not self.connectors or self.store.list_runs(None, limit=1) or self.store.stats():
+            return []
+        started = [s for s in sorted(self.connectors) if self.start(s) is not None]
+        if started:
+            log.warning("Index vide : synchronisation complète de %d source(s) (%s)", len(started), ", ".join(started))
+        return started
+
     def start_scheduler(self, every: float = 30.0) -> None:
         self._every = every
         self._wanted = True  # l'application tourne : une source planifiée ajoutée plus tard démarre aussi
+        if self.auto_sync_empty:
+            try:
+                self.sync_if_empty()
+            except Exception:  # base pas encore prête : le prochain démarrage réessaiera
+                log.exception("Vérification de l'index vide")
         if not self.schedule or self._scheduler is not None:
             return
 
@@ -121,7 +141,14 @@ class SyncManager:
         if t:
             t.join(timeout)
 
-    def _run(self, source: str, run_id: int, max_delete_ratio: float) -> None:
+    def _run(self, source: str, run_id: int, max_delete_ratio: float, lock=None) -> None:
+        try:
+            self._sync(source, run_id, max_delete_ratio)
+        finally:
+            if lock is not None:
+                lock.release()
+
+    def _sync(self, source: str, run_id: int, max_delete_ratio: float) -> None:
         try:
             report = sync_source(self.connectors[source], self.store, self.embedder,
                                  analyzer=self.analyzer, converter=self.converter,

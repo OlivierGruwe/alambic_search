@@ -36,6 +36,22 @@ services:
       - "127.0.0.1:3000:3000"   # accès depuis le poste (make run) ; jamais exposé au réseau
     restart: unless-stopped
 
+  # Reclassement des résultats (cross-encoder BAAI/bge-reranker-v2-m3) servi par Text Embeddings
+  # Inference. Démarré seulement avec `make rerank` (ou --profile rerank). Premier démarrage :
+  # téléchargement du modèle (~2 Go, gardé dans le volume). Carte NVIDIA : RERANK_IMAGE (voir .env.example).
+  # Téléchargement impossible depuis le conteneur (proxy, erreur « relative URL without a base ») :
+  # make rerank-modele (téléchargé sur le poste dans ./models), puis RERANK_MODEL_ID=/models/bge-reranker-v2-m3.
+  rerank:
+    image: ${RERANK_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.8}
+    command: ["--model-id", "${RERANK_MODEL_ID:-BAAI/bge-reranker-v2-m3}", "--max-client-batch-size", "64"]
+    ports:
+      - "127.0.0.1:8082:80"     # accès depuis le poste (make run) ; jamais exposé au réseau
+    volumes:
+      - rerank:/data
+      - ./models:/models:ro
+    profiles: ["rerank"]
+    restart: unless-stopped
+
   # Connexion unique (OIDC) pour Alambic Search, Alambic Light et le portail.
   # Mode développement : royaume « alambic » importé au premier démarrage (keycloak/realm-alambic.json),
   # comptes de démo olivier / alice / bob (mot de passe : demo). Console : http://localhost:8180/admin
@@ -75,6 +91,8 @@ services:
         required: false
     environment:
       CONVERT_URL: http://gotenberg:3000
+      # Reclassement : seulement si RERANK_URL est renseigné dans .env, joint alors dans Docker
+      RERANK_URL: ${RERANK_URL:+http://rerank:80}
       OIDC_INTERNAL_URL: http://keycloak:8180/realms/alambic   # oidc.url_interne dans sources.yaml
       DATABASE_URL: postgresql://ged:ged@db:5432/ged
       EMBED_BASE_URL: http://ollama:11434/v1
@@ -111,6 +129,7 @@ networks:
     external: true   # créé par make sso (docker network create alambic_sso)
 
 volumes:
+  rerank:
   keycloak:
   pgdata:
   ollama:

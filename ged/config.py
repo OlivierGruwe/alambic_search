@@ -25,7 +25,8 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         return cls(
-            database_url=os.environ.get("DATABASE_URL", "postgresql://ged:ged@127.0.0.1:5433/ged"),
+            # DATABASE_PASSWORD(_FILE) complète une URL sans mot de passe (secret Docker en Swarm)
+            database_url=_db_url(),
             embed_base_url=os.environ.get("EMBED_BASE_URL", "http://127.0.0.1:11434/v1"),
             embed_model=os.environ.get("EMBED_MODEL", "bge-m3"),
             embed_dim=int(os.environ.get("EMBED_DIM", "1024")),
@@ -35,6 +36,13 @@ class Settings:
             sources_file=os.environ.get("SOURCES_FILE", "sources.yaml"),
             convert_url=os.environ.get("CONVERT_URL", "").strip(),
         )
+
+
+def _db_url() -> str:
+    from ged.envfiles import with_password
+
+    return with_password(os.environ.get("DATABASE_URL", "postgresql://ged:ged@127.0.0.1:5433/ged"),
+                         os.environ.get("DATABASE_PASSWORD"))
 
 
 class ConfigError(ValueError):
@@ -186,6 +194,8 @@ def validate_source(src: dict) -> dict:
         raise ConfigError(f"{where} : type « {kind} » non géré (filesystem, smb, ftp, s3, alfresco, cmis, sharepoint)")
     if not _bool(src.get("analyse_light", True)):
         out["analyse_light"] = False  # texte seul : pas de type ni de données (OCR des scans seulement)
+    if _bool(src.get("ocr_ia", False)):
+        out["ocr_ia"] = True  # texte seul : scans lus par l'IA d'Alambic Light (ocr=ia)
     from ged.secret_box import SECRET_FIELD
 
     field = SECRET_FIELD.get(kind)
