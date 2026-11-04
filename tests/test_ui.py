@@ -129,3 +129,12 @@ def test_document_id_with_slashes_opens_detail(connector, store, embedder):
     assert 'hx-get="/admin/documents/partage/__out__/auto/doc%201%23a.pdf"' in table
     detail = c.get("/admin/documents/partage/__out__/auto/doc%201%23a.pdf", auth=AUTH)
     assert detail.status_code == 200 and "illisible" in detail.text
+
+
+def test_version_is_shown(connector, store, embedder):
+    from ged import version_label
+
+    assert version_label("0.9.0b1") == "0.9.0 bêta 1" and version_label("1.0.0") == "1.0.0"
+    c, _ = client_for(connector, store, embedder)
+    assert c.get("/health").json()["version"]
+    assert "version " in c.get("/admin", auth=AUTH).text

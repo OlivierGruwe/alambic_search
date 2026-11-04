@@ -1,0 +1,38 @@
+# Ajouté par make stack-deploy quand BACKUP_S3=1 : copie des sauvegardes vers un stockage S3.
+# Secrets à créer avant (BACKUP_S3=1 sh deploy/swarm/secrets.sh) : search_s3_access_key, search_s3_secret_key.
+services:
+  backup-s3:
+    image: ${RCLONE_IMAGE:-rclone/rclone:1.68}
+    entrypoint: ["/bin/sh", "/backup-s3.sh"]
+    environment:
+      S3_ENDPOINT: ${S3_ENDPOINT:-}               # ex. https://s3.gra.io.cloud.ovh.net ; vide : AWS
+      S3_REGION: ${S3_REGION:-}                   # région du bucket (AWS : ex. eu-west-3) ; vide : us-east-1
+      S3_PROVIDER: ${S3_PROVIDER:-}               # vide : AWS sans S3_ENDPOINT, Other avec
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_PREFIX: ${S3_PREFIX:-alambic-search}
+      S3_SSE: ${S3_SSE:-}
+      S3_INTERVAL: ${S3_INTERVAL:-3600}
+    secrets: [search_s3_access_key, search_s3_secret_key]
+    configs:
+      - source: backup_s3_script
+        target: /backup-s3.sh
+        mode: 0555
+    volumes:
+      - backups:/backups:ro                       # lecture seule : ne touche jamais aux sauvegardes locales
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.alambic.db == true]   # le volume des sauvegardes est sur ce nœud
+      resources:
+        limits: {memory: 256M}
+      restart_policy: {condition: any, delay: 30s}
+
+secrets:
+  search_s3_access_key: {external: true, name: "${S3_ACCESS_KEY_SECRET:-search_s3_access_key}"}
+  search_s3_secret_key: {external: true, name: "${S3_SECRET_KEY_SECRET:-search_s3_secret_key}"}
+
+configs:
+  backup_s3_script:
+    file: ./backup-s3.sh
+    name: search_backup_s3_${CONFIG_VERSION:-1}

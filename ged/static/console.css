@@ -302,3 +302,4 @@ a.thumb:hover, a.thumb:focus-visible { border-color: var(--al-accent, #A9561F); 
 .kv dt { color: var(--ink-2); }
 .kv dd { margin: 0; }
 .status.info { color: var(--al-info); background: var(--al-info-soft); }
+.al-version { font-size: 11px; color: var(--al-text-3); }

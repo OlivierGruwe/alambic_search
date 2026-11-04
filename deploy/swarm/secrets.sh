@@ -42,4 +42,15 @@ printf "Clé d'API du LLM en ligne, ex. Mistral AI (vide : LLM local, Ollama) : 
 creer search_llm_api_key "${LLMKEY:-aucune}"
 printf "Clé d'API d'Alambic Light (vide si pas encore connue) : "; read -r LIGHT || true
 creer search_light_api_key "${LIGHT:-a-definir}"
+if [ "${BACKUP_S3:-0}" = 1 ]; then
+  echo "Copie des sauvegardes vers S3 (BACKUP_S3=1) :"
+  # Saisie visible : la saisie masquée (stty) duplique les collages sous Git Bash
+  printf "  ID de clé d'accès (AWS : 20 caractères, AKIA…) : "; read -r S3AK || true
+  printf "  Clé d'accès secrète (AWS : 40 caractères) : "; read -r S3SK || true
+  S3AK=$(printf '%s' "${S3AK:-}" | tr -d ' \r\n'); S3SK=$(printf '%s' "${S3SK:-}" | tr -d ' \r\n')
+  case "$S3AK" in */*) echo "  L'ID de clé contient un / : c'est sans doute la clé secrète. Rien n'est créé." >&2; exit 1;; esac
+  [ -n "$S3AK" ] && creer search_s3_access_key "$S3AK"
+  [ -n "$S3SK" ] && creer search_s3_secret_key "$S3SK"
+  clear 2>/dev/null || true   # efface la clé secrète de l'écran
+fi
 echo "Terminé. Valeurs lisibles plus tard : non (Docker ne les rend jamais) — d'où le coffre."

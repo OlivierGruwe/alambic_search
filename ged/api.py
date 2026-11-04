@@ -183,7 +183,9 @@ def create_app(
     async def health():
         """Contrôle de santé (Swarm). Asynchrone : ne passe pas par le pool de fils des requêtes,
         donc répond même quand l'instance est occupée (synchro, questions longues)."""
-        return {"status": "ok", "sources": sorted(connectors), "llm": llm is not None}
+        from ged import version
+
+        return {"status": "ok", "version": version(), "sources": sorted(connectors), "llm": llm is not None}
 
     from ged.models import Role
 
@@ -234,6 +236,9 @@ def create_app(
         return f"{'/admin' if admin else ''}/vignettes/{source}/{doc_path(doc_id)}?page={page or 1}"
 
     templates.env.globals["thumb_url"] = thumb_url
+    from ged import version_label
+
+    templates.env.globals["app_version"] = version_label()
     templates.env.globals["bandeau"] = lambda request: build_context(request, auth)
 
     app.include_router(build_user_router(store, embedder, llm, auth, document_url, reranker=reranker))

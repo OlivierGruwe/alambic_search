@@ -85,7 +85,8 @@ stack-deploy: ## Déploie ou met à jour la stack sur le Swarm (depuis un manage
 	@test -f deploy/swarm/sources.yaml || (echo "Créer deploy/swarm/sources.yaml depuis sources.example.yaml" && exit 1)
 	$(stack_vars) && docker stack deploy -c deploy/swarm/stack.yml \
 	  $$([ "$${STACK_GPU:-1}" = 0 ] || echo -c deploy/swarm/stack.gpu.yml) \
-	  $$([ "$${STACK_CHIFFRE:-1}" = 0 ] || echo -c deploy/swarm/stack.chiffre.yml) --with-registry-auth --prune $(STACK)
+	  $$([ "$${STACK_CHIFFRE:-1}" = 0 ] || echo -c deploy/swarm/stack.chiffre.yml) \
+	  $$([ "$${BACKUP_S3:-0}" = 1 ] && echo -c deploy/swarm/stack.s3.yml) --with-registry-auth --prune $(STACK)
 
 stack-ps: ## État des services et des tâches de la stack
 	docker stack services $(STACK)

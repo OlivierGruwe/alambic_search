@@ -1,4 +1,4 @@
-# Alambic Search — POC
+# Alambic Search — version 0.9.0 bêta 1
 
 Couche d'interrogation par-dessus un partage réseau existant : indexation du contenu,
 recherche hybride (plein texte + vecteurs), réponses avec citations au niveau de la page,
@@ -13,30 +13,39 @@ Prérequis : Docker, [uv](https://docs.astral.sh/uv/) et `make`. `make` seul lis
 
 ```bash
 cp sources.example.yaml sources.yaml          # adapter les règles de droits
-export ADMIN_PASSWORD='un-mot-de-passe-solide'
+export ADMIN_PASSWORD='un-mot-de-passe-solide'   # premier démarrage : compte « admin »
 make up                                       # base, Ollama, API
-make pull-models                              # bge-m3 et mistral-small
+make pull-models                              # modèles EMBED_MODEL et LLM_MODEL de .env
 
 curl -X POST -u admin:$ADMIN_PASSWORD localhost:8002/sources/partage-commun/sync
-curl -X POST localhost:8002/ask -H 'X-User-Groups: compta' \
+curl -X POST localhost:8002/ask -u admin:$ADMIN_PASSWORD \
      -H 'Content-Type: application/json' \
      -d '{"question": "Quelle est la pénalité de retard du contrat de maintenance ?"}'
 ```
+
+Puis `http://localhost:8002` : connexion avec `admin`, comptes à créer dans la console
+(**Utilisateurs**), clés d'API dans **Mon compte**. Un compte ne voit que les documents de ses
+droits (compte Windows rattaché ou groupes saisis) : `admin` sans groupe ne voit que ce qui est
+ouvert à tous.
 
 `demo-data/` contient trois fichiers d'exemple ; pour un vrai test, monter le partage
 SMB/NFS en lecture seule à la place (voir `docker-compose.yml`).
 
 ## Console d'administration
 
-Ouvrir `http://localhost:8002/admin` (utilisateur `admin`, mot de passe `ADMIN_PASSWORD`).
-Sans mot de passe défini, la console est désactivée.
+Ouvrir `http://localhost:8002/admin`, avec un compte **gestionnaire** ou **administrateur**
+(premier démarrage : `admin` / `ADMIN_PASSWORD`). Le même menu latéral sert à la recherche et à
+la console ; il n'affiche que les pages permises par le rôle.
 
 - **Tableau de bord** : état de l'index (indexés, à passer en OCR, en erreur), questions des 14 derniers jours
   et part restée sans source citée, documents à traiter, dernière synchro par source.
 - **Sources** : emplacement, formats, droits par dossier, synchronisation en un clic (en arrière-plan,
   suivi en direct) et historique des passages avec leurs erreurs.
-- **Documents** : recherche par chemin, filtres par source et statut, détail d'un document (droits,
-  extraits indexés, motif d'erreur).
+- **Documents** : recherche par chemin, filtres par source, statut et type, pagination (25 à 200
+  par page), détail d'un document (droits, extraits indexés, motif d'erreur, vignette).
+- **Droits** : d'où viennent les principaux (documents et comptes), test d'un compte (ce qu'il voit,
+  source par source), principaux que personne ne possède.
+- **Utilisateurs** (administrateurs) : comptes, rôles, compte Windows rattaché, groupes, clés d'API.
 - **Bac à sable** : poser une question à la place d'un utilisateur (ses groupes), voir la réponse,
   les extraits transmis au modèle et ceux qui ont été cités. Ces questions n'entrent pas dans les statistiques.
 
@@ -57,8 +66,8 @@ Avec une source `type: smb`, Alambic Search lit le partage directement en SMB (s
 - **Compte de service** : lecture seule, avec « Lire les autorisations ». Un fichier qu'il ne
   peut pas lire apparaît en erreur dans la console.
 
-Avec une section `identity: type: ldap`, l'utilisateur (en-tête `X-User`, champ « Utilisateur »
-du bac à sable) est résolu dans l'Active Directory : son SID, tous ses groupes via `tokenGroups`
+Avec une section `identity: type: ldap`, le compte Windows rattaché à un compte Alambic Search
+(et l'en-tête `X-User`, le champ « Compte » du bac à sable) est résolu dans l'Active Directory : son SID, tous ses groupes via `tokenGroups`
 (imbriqués et groupe principal compris), plus « Tout le monde » et « Utilisateurs authentifiés ».
 Les noms de groupes sont aussi ajoutés, ce qui permet d'écrire les règles des sources
 `filesystem` avec des noms AD. La console affiche les noms plutôt que les SID.
@@ -89,7 +98,13 @@ La formulation par le LLM est optionnelle.
 - **Par question** : `"formuler": false` dans `/ask`, case « Formuler une réponse avec le LLM »
   du bac à sable, `make ask ... EXTRAITS=1` en ligne de commande.
 
-Les droits s'appliquent de la même façon dans les deux cas. `/ask` renvoie `formulee`
+- **LLM en ligne, Mistral AI** (France) : réponses rapides sans carte graphique.
+  `LLM_BASE_URL=https://api.mistral.ai/v1`, `LLM_MODEL=mistral-small-latest` et `LLM_API_KEY`
+  (Swarm : secret `search_llm_api_key`). Seuls la question et les extraits que l'utilisateur a le
+  droit de lire sont envoyés ; les vecteurs restent calculés en local (bge-m3), l'indexation ne
+  passe jamais par le service. Quota dépassé (429) ou indisponibilité passagère : deux nouveaux essais.
+
+Les droits s'appliquent de la même façon dans tous les cas. `/ask` renvoie `formulee`
 (true/false) et, sans formulation, `extraits` (texte, fichier, page, type).
 
 **Identifiant dans la question** (n° de permis, de facture, de contrat : au moins 5 caractères
@@ -289,8 +304,13 @@ Case « Type et données (Alambic Light) » de chaque source (`analyse_light: fa
 
 « Synchronisation automatique » (en minutes) sur une source, dans la console : resynchronisation automatique (nouveaux
 fichiers, droits, validations Alambic Light). Minimum 5 minutes ; sans ce réglage, synchro
-manuelle (console, `make sync`). Le planificateur tourne dans l'API : une seule instance d'API
-par base pour l'instant.
+manuelle (console, `make sync`). En Compose, le planificateur tourne dans l'API ; en Swarm, dans le
+service `worker` (`SCHEDULER_ENABLED=false` sur les instances `api`). Un verrou PostgreSQL par source
+empêche deux synchros simultanées, quelle que soit l'instance.
+
+Arrêt du service pendant une synchro (mise à jour, redémarrage) : elle s'interrompt proprement
+(`SHUTDOWN_WAIT`, 25 s) ; les documents non traités restent tels quels, rien n'est supprimé, et le
+passage est noté « Interrompue ». La synchro suivante reprend le reste.
 
 ## Production : Docker Swarm
 
@@ -300,12 +320,44 @@ et plus, sans état), `worker` (synchronisations planifiées), `db` + `backup`, 
 placement par étiquettes de nœuds (`alambic.db`, `alambic.gpu`, `alambic.edge`).
 
 ```bash
-sh deploy/swarm/secrets.sh                 # une fois, sur un manager
+sh deploy/swarm/secrets.sh                 # une fois, sur un manager (Docker Desktop : STACK_CHIFFRE=0 sh …)
 cp deploy/swarm/stack.env.example deploy/swarm/stack.env      # puis adapter
 cp deploy/swarm/sources.example.yaml deploy/swarm/sources.yaml
 make push && make stack-deploy             # construire, publier, déployer
 make stack-ps                              # état
 ```
+
+Nouvelle version : incrémenter `TAG` dans `stack.env` (ex. `0.9.0-beta.1`) avant `make image` et
+`make stack-deploy`, sinon Swarm ne voit pas de nouvelle image et garde les instances en place.
+
+Swarm à un seul nœud (poste de développement sous Docker Desktop, petit serveur), dans `stack.env` :
+
+| Variable | Rôle |
+| --- | --- |
+| `APP_ROLE=manager` | services applicatifs sur le manager (défaut : nœuds worker) |
+| `STACK_GPU=0` | pas de réservation de carte NVIDIA pour Ollama (`stack.gpu.yml`) |
+| `STACK_CHIFFRE=0` | réseaux non chiffrés (module IPsec absent de Docker Desktop ; `stack.chiffre.yml`) |
+| `OLLAMA_URL=http://host.docker.internal:11434` | Ollama hors stack (celui de Compose, qui a la carte graphique) |
+| `RERANK_BATCH_TOKENS=4096` | taille des lots du reranker (mémoire bornée en CPU) |
+
+**Sauvegardes vers S3** (AWS, OVHcloud, Scaleway, MinIO…) : `BACKUP_S3=1` et `S3_ENDPOINT`,
+`S3_REGION`, `S3_BUCKET`, `S3_PREFIX` dans `stack.env`, clés dans les secrets `search_s3_access_key` /
+`search_s3_secret_key` (`BACKUP_S3=1 sh deploy/swarm/secrets.sh`). Le service `backup-s3` (rclone, sur
+le nœud base) copie toutes les heures les `pg_dump` de `/backups` vers le bucket, sans jamais rien y
+supprimer ni réécrire : la conservation se règle par une règle de cycle de vie du bucket. Compte S3
+limité à l'écriture dans ce bucket ; `S3_SSE=AES256` pour le chiffrement côté serveur. Restaurer
+depuis S3 : ramener le fichier dans `/backups` du nœud base, puis suivre la restauration habituelle :
+
+```bash
+docker run --rm -v search_backups:/backups \
+  -e RCLONE_CONFIG_S3_TYPE=s3 -e RCLONE_CONFIG_S3_PROVIDER=Other \
+  -e RCLONE_CONFIG_S3_ENDPOINT=https://… -e RCLONE_CONFIG_S3_ACCESS_KEY_ID=… -e RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=… \
+  rclone/rclone:1.68 copy s3:<bucket>/alambic-search/ged-AAAA-MM-JJ-HHMM.dump /backups/
+```
+
+Robustesse : les instances démarrées ensemble initialisent le schéma sous verrou ; l'API attend la
+base jusqu'à `DB_WAIT` secondes (90) au lieu de s'arrêter ; `/health` répond même sous charge ;
+Swarm laisse 40 s à l'arrêt (`stop_grace_period`). Accès : `https://SEARCH_HOST` via Caddy.
 
 Plusieurs instances partagent un verrou PostgreSQL par source : une source n'est jamais
 synchronisée deux fois en même temps (api, worker, ligne de commande). `SCHEDULER_ENABLED=false`
@@ -362,7 +414,10 @@ ged/
   sync.py                   delta : ajout, modification (hash), déplacement, droits, suppression
   store.py                  PostgreSQL + pgvector, recherche hybride RRF filtrée par droits
   answer.py                 contexte numéroté → LLM → citations [n] vérifiées
-  api.py / cli.py           points d'entrée
+  accounts.py / auth.py     comptes, mots de passe (scrypt), clés d'API, rôles, droits du compte
+  llm.py                    LLM compatible OpenAI : Ollama, vLLM ou Mistral AI (clé d'API)
+  api.py / web.py / ui.py   API, pages de recherche et de compte, console
+  cli.py                    ligne de commande (sync, ask, eval, compte…)
 ```
 
 Comportements à connaître :
@@ -373,6 +428,7 @@ Comportements à connaître :
 - **Garde-fou** : si plus de 50 % des documents disparaissent d'un coup (partage démonté),
   la synchro s'arrête sans rien supprimer. Idem si le parcours échoue en cours de route.
 - **Erreurs** : un fichier illisible est journalisé et retenté au passage suivant.
+- **Caractères NUL** (0x00, certains PDF et OCR) : retirés avant l'enregistrement.
 - **Doublons** : une même copie présente à plusieurs endroits n'apparaît qu'une fois dans le contexte.
 - **Recherche plein texte** : configuration `french` (racinisation), termes combinés en OU.
 - `EMBED_DIM` fixe la dimension de la colonne vecteur à la création : changer de modèle
@@ -406,11 +462,10 @@ Les tests couvrent l'extraction, le découpage, le connecteur, la synchro (ajout
 déplacement, suppression, garde-fous, OCR requis, erreurs), le filtrage des droits avant le LLM,
 les citations et l'API de bout en bout.
 
-## Hors POC / étapes suivantes
+## Après la bêta
 
-- Indexation dans un worker séparé (la console ne partage plus le processus des synchros)
-- ACL NTFS réelles (SID résolus via l'AD) et agent local avec journal USN
+- Connexion Windows automatique (Kerberos) et fédération Entra ID, en plus des comptes locaux
+- Agent local avec journal USN pour les très gros partages (au lieu du parcours complet)
 - Routeur : questions agrégées (montants, dates) en SQL sur les champs extraits
-- Connecteurs SharePoint (Graph, delta token) et CMIS
-- Traitement asynchrone (Celery) pour le scan initial des gros volumes
-- Journal d'audit des questions et des accès
+- Journal d'audit des accès aux documents ; purge planifiée du journal des questions
+- File de traitement (Celery) pour le scan initial des gros volumes
