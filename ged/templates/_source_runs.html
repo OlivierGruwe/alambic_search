@@ -1,6 +1,6 @@
-{% from "_macros.html" import sync_progress %}
+{% from "_macros.html" import sync_progress, pager %}
 <div id="runs-{{ s.name }}"
-     {% if s.running %}hx-get="/admin/sources/{{ s.name }}/runs" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+     {% if s.running and s.runs_p == 1 %}hx-get="/admin/sources/{{ s.name }}/runs" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   <div class="section-head">
     <div class="counts">
       {% for st, label in DOC_LEGEND.items() %}{% if s.counts.get(st) %}<span><b>{{ s.counts.get(st)|num }}</b> {{ label }}</span>{% endif %}{% endfor %}
@@ -45,6 +45,10 @@
     {% endfor %}
     </tbody>
   </table></div>
+  {% if s.runs_pages > 1 %}
+  <div class="list-foot"><span class="hint" style="margin: 0">{{ s.runs_total|num }} synchronisations</span>
+    {{ pager(s.runs_p, s.runs_pages, "/admin/sources/" ~ s.name ~ "/runs?", "#runs-" ~ s.name, push=False, label="Pages des synchronisations de " ~ s.name) }}</div>
+  {% endif %}
   {% else %}
   <p class="empty">Aucune synchronisation pour l'instant. La première indexe tous les documents de la source.</p>
   {% endif %}

@@ -27,6 +27,8 @@ from ged.models import RunStatus, Status
 
 HERE = Path(__file__).parent
 PAGE_SIZE = 50
+PAGE_SIZES = (25, 50, 100, 200)
+RUNS_PAGE = 10
 
 DOC_STATUS = {
     Status.INDEXED: ("Indexé", "ok"),
@@ -222,8 +224,11 @@ def build_router(
 
     # --- Sources et synchros -------------------------------------------------------
 
-    def source_ctx(name: str) -> dict:
+    def source_ctx(name: str, p: int = 1) -> dict:
         conn = connectors.get(name)
+        runs_total = store.count_runs(name)
+        runs_pages = max(1, math.ceil(runs_total / RUNS_PAGE))
+        p = min(max(p, 1), runs_pages)
         return {
             "name": name,
             "editable": catalog.editable(name) if catalog else False,
@@ -233,7 +238,8 @@ def build_router(
             "progress": manager.progress(name),
             "every": manager.schedule.get(name),
             "next": manager.next_run(name),
-            "runs": store.list_runs(name, limit=15),
+            "runs": store.list_runs(name, limit=RUNS_PAGE, offset=(p - 1) * RUNS_PAGE),
+            "runs_total": runs_total, "runs_p": p, "runs_pages": runs_pages,
             "counts": store.stats().get(name, {}),
             "can_refresh_acls": hasattr(conn, "invalidate_acls"),
             "active": conn is not None,
@@ -430,21 +436,28 @@ def build_router(
         return templates.TemplateResponse(request, "_source_runs.html", {"s": source_ctx(name)})
 
     @router.get("/sources/{name}/runs", response_class=HTMLResponse)
-    def source_runs(request: Request, name: str):
+    def source_runs(request: Request, name: str, p: int = 1):
         if name not in connectors:
             raise HTTPException(404, f"Source inconnue : {name}")
-        return templates.TemplateResponse(request, "_source_runs.html", {"s": source_ctx(name)})
+        return templates.TemplateResponse(request, "_source_runs.html", {"s": source_ctx(name, p)})
 
     # --- Documents -----------------------------------------------------------------
 
     @router.get("/documents", response_class=HTMLResponse)
-    def documents(request: Request, source: str = "", status: str = "", q: str = "", type: str = "", p: int = 1):
+    def documents(request: Request, source: str = "", status: str = "", q: str = "", type: str = "", p: int = 1,
+                  n: int = PAGE_SIZE):
+        n = n if n in PAGE_SIZES else PAGE_SIZE
         p = max(p, 1)
         rows, total = store.list_documents(source or None, status or None, q.strip() or None,
-                                           offset=(p - 1) * PAGE_SIZE, limit=PAGE_SIZE, doc_type=type or None)
+                                           offset=(p - 1) * n, limit=n, doc_type=type or None)
+        pages = max(1, math.ceil(total / n))
+        if p > pages:  # page au-delà de la fin (filtre resserré) : dernière page
+            p = pages
+            rows, total = store.list_documents(source or None, status or None, q.strip() or None,
+                                               offset=(p - 1) * n, limit=n, doc_type=type or None)
         ctx = {
-            "rows": rows, "total": total, "p": p, "pages": max(1, math.ceil(total / PAGE_SIZE)),
-            "f": {"source": source, "status": status, "q": q, "type": type}, "sources": sorted(connectors),
+            "rows": rows, "total": total, "p": p, "pages": pages, "n": n, "page_sizes": PAGE_SIZES,
+            "f": {"source": source, "status": status, "q": q, "type": type, "n": n}, "sources": sorted(connectors),
             "types": store.type_counts(),
         }
         if request.headers.get("HX-Request") and request.headers.get("HX-Target") == "doc-results":
@@ -496,6 +509,54 @@ def build_router(
             "d": row, "chunks": store.document_chunks(source, doc_id, limit=30), "notice": notice})
 
     # --- Bac à sable ---------------------------------------------------------------
+
+    # --- Droits : comment les groupes se rejoignent ------------------------------------
+
+    @router.get("/droits", response_class=HTMLResponse)
+    def rights(request: Request, login: str = "", groups: str = ""):
+        from ged.rights import classify, user_warnings
+
+        display = identity.display_name if identity is not None else None
+        stats = store.stats()
+        by_source: dict[str, list[dict]] = {}
+        index_kinds: set[str] = set()
+        for src, principal, allow, deny in store.principal_counts():
+            kind = classify(principal, display)
+            index_kinds.add(kind.code)
+            by_source.setdefault(src, []).append({
+                "principal": principal, "name": pname(principal), "kind": kind, "allow": allow, "deny": deny})
+        sources = []
+        for src in sorted(set(by_source) | set(stats)):
+            rows = by_source.get(src, [])
+            conn = connectors.get(src)
+            info = conn.describe() if hasattr(conn, "describe") else {}
+            sources.append({"name": src, "rows": rows[:300], "more": max(0, len(rows) - 300),
+                            "total": stats.get(src, {}).get("indexed", 0),
+                            "orphans": [r for r in rows if r["kind"].orphan],
+                            "unmapped": info.get("unmapped") or []})
+        test = None
+        if login.strip() or groups.strip():
+            try:
+                from ged.identity import AUTHENTICATED_USERS
+                from ged.ntsecurity import EVERYONE
+
+                # tout utilisateur connecté les reçoit (annuaire comme jeton Keycloak)
+                principals = resolve_principals(identity, login, groups) | {EVERYONE, AUTHENTICATED_USERS}
+            except Exception as exc:  # annuaire injoignable
+                test = {"error": f"L'annuaire n'a pas répondu ({type(exc).__name__} : {exc})."}
+            else:
+                visible = store.visible_counts(principals)
+                test = {
+                    "login": login.strip(), "groups": groups.strip(),
+                    "principals": sorted(({"principal": p, "name": pname(p), "kind": classify(p)} for p in principals),
+                                         key=lambda r: (r["kind"].code, r["name"].lower())),
+                    "per_source": [{"name": s["name"], "visible": visible.get(s["name"], 0), "total": s["total"]}
+                                   for s in sources],
+                    "warnings": user_warnings(principals, index_kinds),
+                    "unknown": bool(login.strip()) and identity is not None
+                    and not identity.principals(login.strip()),
+                }
+        return page(request, "droits.html", "droits", sources=sources, test=test, login=login, groups=groups)
 
     @router.get("/sandbox", response_class=HTMLResponse)
     def sandbox(request: Request):

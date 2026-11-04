@@ -9,7 +9,7 @@
   </div>
 </header>
 
-<form class="filters" hx-get="/admin/documents" hx-target="#doc-results" hx-push-url="true"
+<form class="filters" id="doc-filters" hx-get="/admin/documents" hx-target="#doc-results" hx-swap="outerHTML" hx-push-url="true"
       hx-trigger="change, input from:#f-q delay:350ms, submit">
   <div class="field">{{ label("f-q", "Chemin contient", "Partie du chemin ou du nom de fichier (ex. factures/2026). Pour chercher dans le contenu, utilisez le bac à sable.") }}
     <input id="f-q" type="search" name="q" value="{{ f.q }}" placeholder="ex. factures/2026"></div>
@@ -31,9 +31,7 @@
 </form>
 
 <div class="split">
-  <section class="section" style="margin: 0" id="doc-results">
-    {% include "_doc_table.html" %}
-  </section>
+  {% include "_doc_table.html" %}
   <aside class="panel" id="detail" aria-live="polite"></aside>
 </div>
 {% endblock %}

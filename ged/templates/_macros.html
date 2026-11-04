@@ -40,3 +40,21 @@
 {% macro thumb(url, href) -%}
 {% if url %}<a class="thumb" href="{{ href }}" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="{{ url }}&amp;l=160" srcset="{{ url }}&amp;l=160 1x, {{ url }}&amp;l=320 2x" width="80" height="107" loading="lazy" decoding="async" alt=""></a>{% else %}<span class="thumb thumb-none" aria-hidden="true"></span>{% endif %}
 {%- endmacro %}
+
+{# Pagination : précédente, 1 … p-2..p+2 … dernière, suivante. `url` se termine par ? ou & #}
+{% macro pager(p, pages, url, target, push=True, label="Pagination") -%}
+{% if pages > 1 %}
+{% set hx %}hx-target="{{ target }}" hx-swap="outerHTML"{% if push %} hx-push-url="true"{% endif %}{% endset %}
+<nav class="pager" aria-label="{{ label }}">
+  {% if p > 1 %}<a href="{{ url }}p={{ p - 1 }}" hx-get="{{ url }}p={{ p - 1 }}" {{ hx }} aria-label="Page précédente">‹</a>{% else %}<span class="off" aria-hidden="true">‹</span>{% endif %}
+  {% set lo, hi = [1, p - 2]|max, [pages, p + 2]|min %}
+  {% if lo > 1 %}<a href="{{ url }}p=1" hx-get="{{ url }}p=1" {{ hx }}>1</a>{% if lo > 2 %}<span class="gap">…</span>{% endif %}{% endif %}
+  {% for i in range(lo, hi + 1) %}
+    {% if i == p %}<span class="cur" aria-current="page">{{ i }}</span>
+    {% else %}<a href="{{ url }}p={{ i }}" hx-get="{{ url }}p={{ i }}" {{ hx }}>{{ i }}</a>{% endif %}
+  {% endfor %}
+  {% if hi < pages %}{% if hi < pages - 1 %}<span class="gap">…</span>{% endif %}<a href="{{ url }}p={{ pages }}" hx-get="{{ url }}p={{ pages }}" {{ hx }}>{{ pages }}</a>{% endif %}
+  {% if p < pages %}<a href="{{ url }}p={{ p + 1 }}" hx-get="{{ url }}p={{ p + 1 }}" {{ hx }} aria-label="Page suivante">›</a>{% else %}<span class="off" aria-hidden="true">›</span>{% endif %}
+</nav>
+{% endif %}
+{%- endmacro %}

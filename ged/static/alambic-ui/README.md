@@ -8,10 +8,14 @@ composants). Ce dossier est la source de vérité : copié tel quel dans chaque 
 | `alambic.css` | Jetons (`--al-*`), bandeau, sélecteur d'applications, menu latéral, boutons, statuts, aides |
 | `alambic.js` | Facultatif : un seul menu ouvert, fermeture au clic extérieur et sur Échap |
 | `bandeau.html` | Bandeau et menu à reprendre dans chaque page |
+| `img/arondor.png`, `img/arondor-blanc.png` | Logo d'Arondor : original (fonds clairs : pied du menu, connexion, portail) et version claire (bandeau sombre) |
 | `fonts/` | IBM Plex Sans/Mono, Comfortaa (marque) — licence OFL, aucune ressource externe |
 
 ## Règles
 
+- Logo de la société : `img/arondor-blanc.png` dans le bandeau (classe `al-company`, à droite, avant le
+  client) ; `img/arondor.png` sur fond clair : pied du menu (`al-signature`), pages de connexion et de
+  portail (`<p class="al-powered">Une solution <img …></p>`).
 - Bandeau identique partout : marque « alambic » + produit (search, light), « Applications »,
   client, aide, compte. Seul le nom du produit change.
 - « Applications » : liens groupés par produit, affichés selon les rôles Keycloak

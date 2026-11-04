@@ -59,7 +59,7 @@
 /* --- Bandeau ------------------------------------------------------------------------ */
 
 .al-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; min-height: var(--al-bar-h);
-  padding: 0 24px; background: var(--al-ink); color: #fff; position: relative; z-index: 30; }
+  padding: 0 24px; background: var(--al-ink); color: #fff; position: sticky; top: 0; z-index: 30; }
 .al-brand { display: flex; align-items: center; gap: 10px; color: #fff; text-decoration: none; white-space: nowrap; }
 .al-brand:hover { text-decoration: none; color: #fff; }
 .al-brand svg { width: 30px; height: 24px; flex: none; }
@@ -107,7 +107,9 @@
 
 .al-shell { display: flex; flex-wrap: wrap; align-items: stretch; min-height: calc(100vh - var(--al-bar-h)); }
 .al-nav { flex: 1 1 232px; max-width: 260px; padding: 20px 12px; background: var(--al-surface);
-  border-right: 1px solid var(--al-line); display: flex; flex-direction: column; gap: 2px; }
+  border-right: 1px solid var(--al-line); display: flex; flex-direction: column; gap: 2px;
+  /* menu fixe : toujours visible, signature en bas de l'écran (et non de la page) */
+  position: sticky; top: var(--al-bar-h); align-self: flex-start; height: calc(100vh - var(--al-bar-h)); overflow-y: auto; }
 .al-nav-group { margin: 16px 12px 8px; font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--al-text-3); }
 .al-nav-group:first-child { margin-top: 4px; }
 .al-nav a { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 12px; border-radius: var(--al-radius);
@@ -121,7 +123,9 @@
 .al-main { flex: 999 1 560px; min-width: 0; padding: 32px 40px 64px; }
 @media (max-width: 720px) {
   .al-bar { padding: 8px 16px; }
-  .al-nav { max-width: none; border-right: 0; border-bottom: 1px solid var(--al-line); flex-direction: row; flex-wrap: wrap; }
+  .al-bar { position: relative; }
+  .al-nav { max-width: none; border-right: 0; border-bottom: 1px solid var(--al-line); flex-direction: row; flex-wrap: wrap;
+    position: static; height: auto; overflow: visible; }
   .al-nav-group, .al-nav-foot { display: none; }
   .al-main { padding: 24px 16px 48px; }
 }
@@ -163,3 +167,13 @@
 .al-app :focus-visible { outline: 2px solid var(--al-accent); outline-offset: 2px; }
 .al-bar :focus-visible { outline-color: var(--al-accent-on-ink); }
 @media (prefers-reduced-motion: reduce) { .al-help-tip { transition: none; } }
+
+/* Logo de la société éditrice (Arondor) : version claire dans le bandeau, originale sur fond clair */
+.al-company { display: flex; align-items: center; padding: 0 14px 0 4px; margin-right: 6px; border-right: 1px solid rgba(255, 255, 255, .18); }
+.al-company img { display: block; height: 26px; width: auto; }
+.al-signature { display: block; margin-bottom: 6px; }
+.al-signature img { display: block; height: 28px; width: auto; }
+.al-powered img { display: inline-block; height: 34px; width: auto; vertical-align: middle; }
+.al-powered { margin: 28px 0 0; text-align: center; font-size: 12px; color: var(--al-text-3); }
+.al-powered img { margin-left: 6px; }
+@media (max-width: 720px) { .al-company { display: none; } }

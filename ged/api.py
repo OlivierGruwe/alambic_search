@@ -257,6 +257,8 @@ def create_app(
         return f"{'/admin' if admin else ''}/vignettes/{source}/{doc_path(doc_id)}?page={page or 1}"
 
     templates.env.globals["thumb_url"] = thumb_url
+    # Droits : d'où viennent les groupes des utilisateurs (page Droits de la console)
+    templates.env.globals["oidc_groups_mode"] = oidc.groups_mode if oidc is not None else None
 
     # Bandeau commun Alambic (applications selon les rôles, client, utilisateur) dans toutes les pages
     templates.env.globals["bandeau"] = lambda request: build_context(

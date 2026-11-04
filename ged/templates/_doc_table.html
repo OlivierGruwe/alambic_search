@@ -1,6 +1,7 @@
-{% from "_macros.html" import acl_chips %}
+{% from "_macros.html" import acl_chips, pager %}
+<section class="section" style="margin: 0" id="doc-results">
 {% if rows %}
-<p class="hint" style="margin-bottom: 12px">{{ total|num }} document{{ 's' if total > 1 }}</p>
+<p class="hint" style="margin-bottom: 12px">{{ total|num }} document{{ 's' if total > 1 }}{% if pages > 1 %} — {{ (p - 1) * n + 1 }} à {{ [p * n, total]|min }}{% endif %}</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Chemin</th><th>Statut</th><th class="num">Extraits</th><th>Accès</th><th>Indexé</th></tr></thead>
   <tbody>
@@ -18,14 +19,16 @@
   {% endfor %}
   </tbody>
 </table></div>
-{% if pages > 1 %}
-<nav class="pager" aria-label="Pagination">
-  {% set qs = "source=" ~ f.source ~ "&status=" ~ f.status ~ "&type=" ~ f.type ~ "&q=" ~ (f.q|urlencode) %}
-  {% if p > 1 %}<a href="/admin/documents?{{ qs }}&p={{ p - 1 }}" hx-get="/admin/documents?{{ qs }}&p={{ p - 1 }}" hx-target="#doc-results" hx-push-url="true">Page précédente</a>{% endif %}
-  <span>Page {{ p }} sur {{ pages }}</span>
-  {% if p < pages %}<a href="/admin/documents?{{ qs }}&p={{ p + 1 }}" hx-get="/admin/documents?{{ qs }}&p={{ p + 1 }}" hx-target="#doc-results" hx-push-url="true">Page suivante</a>{% endif %}
-</nav>
-{% endif %}
+{% set qs = "source=" ~ (f.source|urlencode) ~ "&status=" ~ f.status ~ "&type=" ~ (f.type|urlencode) ~ "&q=" ~ (f.q|urlencode) ~ "&n=" ~ n %}
+<div class="list-foot">
+  <label class="hint" style="margin: 0">Afficher
+    <select name="n" form="doc-filters" aria-label="Documents par page"
+            hx-get="/admin/documents" hx-include="#doc-filters" hx-target="#doc-results" hx-swap="outerHTML" hx-push-url="true">
+      {% for k in page_sizes %}<option value="{{ k }}" {% if k == n %}selected{% endif %}>{{ k }}</option>{% endfor %}
+    </select> par page</label>
+  {{ pager(p, pages, "/admin/documents?" ~ qs ~ "&", "#doc-results") }}
+</div>
 {% else %}
 <p class="empty">Aucun document ne correspond à ces filtres.</p>
 {% endif %}
+</section>

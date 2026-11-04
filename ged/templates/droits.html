@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Droits{% endblock %}
+{% from "_macros.html" import label %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Droits</h1>
+    <p class="lede">Un document est visible par un utilisateur quand ils ont au moins un « principal » en commun (un groupe, un SID Windows, son identifiant), et qu'aucun refus ne s'applique. Les droits sont appliqués avant toute recherche et avant le LLM.</p>
+  </div>
+</header>
+
+<section class="section" aria-labelledby="how-title">
+  <h2 id="how-title">D'où viennent les principaux</h2>
+  <div class="rights-sides">
+    <div>
+      <h3>Côté document : le connecteur traduit les droits de la source</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Source</th><th>Ce que porte le document</th></tr></thead>
+        <tbody>
+          <tr><td class="nowrap">Partage Windows (SMB)</td><td>Les <b>SID</b> des comptes et groupes des ACL NTFS, refus compris</td></tr>
+          <tr><td class="nowrap">SharePoint / OneDrive</td><td>Les <b>SID</b> des comptes et groupes synchronisés depuis l'AD ; les groupes de site, traduits en groupes AD par le réglage « Groupes de site → groupes AD » de la source</td></tr>
+          <tr><td class="nowrap">Alfresco, GED CMIS</td><td><code>GROUP_Compta</code> → le <b>nom</b> « Compta » ; un utilisateur → <code>u:identifiant</code> ; « tout le monde » → Tout le monde ; groupes de site et rôles internes → <code>ged:…</code> (personne ne les a)</td></tr>
+          <tr><td class="nowrap">Dossier, FTP, S3</td><td>Les <b>noms</b> de groupes écrits dans les règles par dossier de la source</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div>
+      <h3>Côté utilisateur : l'annuaire ou le jeton</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Origine</th><th>Ce que reçoit l'utilisateur</th></tr></thead>
+        <tbody>
+          <tr {% if has_identity %}class="current"{% endif %}><td class="nowrap">Annuaire AD (LDAP){% if has_identity %} <span class="status ok">actif</span>{% endif %}</td><td>Son <b>SID</b>, les SID de tous ses groupes (imbriqués compris), leurs <b>noms</b>, <code>u:identifiant</code>, Tout le monde</td></tr>
+          <tr {% if oidc_groups_mode == 'jeton' %}class="current"{% endif %}><td class="nowrap">Jeton Keycloak{% if oidc_groups_mode == 'jeton' %} <span class="status warn">actif</span>{% endif %}</td><td>Les <b>noms</b> de groupes du jeton, <code>u:identifiant</code>, Tout le monde — <b>pas de SID</b> : partages Windows et SharePoint invisibles</td></tr>
+          <tr {% if oidc_groups_mode == 'annuaire' %}class="current"{% endif %}><td class="nowrap">Keycloak + annuaire{% if oidc_groups_mode == 'annuaire' %} <span class="status ok">actif</span>{% endif %}</td><td>Connexion par Keycloak, groupes lus dans l'AD : comme la première ligne</td></tr>
+        </tbody>
+      </table></div>
+      {% if not has_identity and not oidc_groups_mode %}<p class="hint">Ni annuaire ni Keycloak configuré : les groupes ne viennent que des en-têtes de l'API ou du bac à sable.</p>{% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="test-title">
+  <h2 id="test-title">Tester un utilisateur</h2>
+  <form class="sandbox-form" method="get" action="/admin/droits">
+    {% if has_identity %}
+    <div class="field">{{ label("r-u", "Utilisateur", "Identifiant Windows. Ses principaux sont lus dans l'annuaire, exactement comme à sa connexion.") }}
+      <input id="r-u" type="text" name="login" value="{{ login }}" placeholder="ex. alice" autocomplete="off"></div>
+    {% endif %}
+    <div class="field">{{ label("r-g", "Groupes" ~ (" supplémentaires" if has_identity else ""), "Noms de groupes séparés par des virgules : pour simuler un jeton Keycloak, ou tester une règle avant de modifier l'annuaire.") }}
+      <input id="r-g" type="text" name="groups" value="{{ groups }}" placeholder="ex. compta, direction" autocomplete="off"></div>
+    <div class="wide"><button class="btn" type="submit">Voir ses droits</button></div>
+  </form>
+
+  {% if test %}
+  {% if test.error %}<div class="error-box" role="alert">{{ test.error }}</div>
+  {% else %}
+  {% if test.unknown %}<div class="error-box" role="alert">« {{ test.login }} » est inconnu de l'annuaire.</div>{% endif %}
+  {% for w in test.warnings %}<p class="notice notice-warn">{{ w }}</p>{% endfor %}
+  <div class="rights-sides" style="margin-top: 14px">
+    <div>
+      <h3>Ses {{ test.principals|length }} principaux</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Principal</th><th>Nature</th></tr></thead>
+        <tbody>
+        {% for p in test.principals %}
+          <tr><td><span class="group" title="{{ p.principal }}">{{ p.name }}</span></td><td class="sub">{{ p.kind.label }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </div>
+    <div>
+      <h3>Ce qu'il voit</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Source</th><th class="num">Documents visibles</th><th class="num">sur</th></tr></thead>
+        <tbody>
+        {% for s in test.per_source %}
+          <tr><td>{{ s.name }}</td><td class="num">{% if s.visible == 0 and s.total %}<span class="status warn">0</span>{% else %}{{ s.visible|num }}{% endif %}</td><td class="num">{{ s.total|num }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+      <p class="hint">Pour voir ce qu'il obtient à une question : <a href="/admin/sandbox">bac à sable</a>, avec le même utilisateur.</p>
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+</section>
+
+<section class="section" aria-labelledby="index-title">
+  <h2 id="index-title">Principaux présents dans l'index</h2>
+  <p class="hint">Pour chaque source, les principaux qui donnent (ou refusent) l'accès à des documents. <span class="status bad">personne</span> : aucun utilisateur ne peut porter ce principal, les documents qui ne dépendent que de lui sont invisibles pour tous.</p>
+  {% for s in sources %}
+  <details class="rights-source" {% if s.orphans or s.unmapped %}open{% endif %}>
+    <summary><b>{{ s.name }}</b> <span class="sub" style="display: inline">— {{ s.total|num }} documents, {{ s.rows|length + s.more }} principaux</span>
+      {% if s.orphans %} <span class="status bad">{{ s.orphans|length }} que personne n'a</span>{% endif %}
+      {% if s.unmapped %} <span class="status warn">{{ s.unmapped|length }} groupe{{ 's' if s.unmapped|length > 1 }} de site non associé{{ 's' if s.unmapped|length > 1 }}</span>{% endif %}</summary>
+    {% if s.unmapped %}
+    <p class="notice notice-warn">Groupes de site SharePoint sans groupe AD associé, ignorés (personne ne reçoit leurs droits) : {{ s.unmapped|join(", ") }}. À renseigner dans <a href="/admin/sources/{{ s.name }}/modifier">les réglages de la source</a>.</p>
+    {% endif %}
+    {% if s.rows %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Principal</th><th>Nature</th><th class="num">Autorise</th><th class="num">Refuse</th><th>État</th></tr></thead>
+      <tbody>
+      {% for r in s.rows %}
+        <tr><td><span class="group" title="{{ r.principal }}">{{ r.name }}</span></td>
+          <td class="sub">{{ r.kind.label }}</td>
+          <td class="num">{{ r.allow|num }}</td><td class="num">{{ r.deny|num if r.deny else '' }}</td>
+          <td>{% if r.kind.orphan %}<span class="status bad" title="{{ r.kind.hint }}">personne</span>{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% if s.more %}<p class="hint">… et {{ s.more|num }} autres, moins fréquents.</p>{% endif %}
+    {% for k in s.orphans|map(attribute='kind')|unique(attribute='code') %}<p class="hint"><b>{{ k.label }}</b> : {{ k.hint }}</p>{% endfor %}
+    {% else %}<p class="empty">Aucun document indexé.</p>{% endif %}
+  </details>
+  {% else %}
+  <p class="empty">Aucune source.</p>
+  {% endfor %}
+</section>
+{% endblock %}

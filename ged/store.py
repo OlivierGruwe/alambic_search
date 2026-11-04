@@ -92,6 +92,8 @@ class Store(Protocol):
 
     # --- Console d'administration --------------------------------------------------
     def stats(self) -> dict[str, Counter]: ...
+    def principal_counts(self) -> list[tuple[str, str, int, int]]: ...
+    def visible_counts(self, groups: frozenset[str]) -> dict[str, int]: ...
     def list_documents(
         self, source: str | None = None, status: str | None = None, q: str | None = None,
         offset: int = 0, limit: int = 50, doc_type: str | None = None,
@@ -100,7 +102,8 @@ class Store(Protocol):
     def document_chunks(self, source: str, doc_id: str, limit: int = 20) -> list[Chunk]: ...
     def start_run(self, source: str) -> int: ...
     def finish_run(self, run_id: int, status: str, report: dict | None = None, message: str | None = None) -> None: ...
-    def list_runs(self, source: str | None = None, limit: int = 20) -> list[SyncRun]: ...
+    def list_runs(self, source: str | None = None, limit: int = 20, offset: int = 0) -> list[SyncRun]: ...
+    def count_runs(self, source: str | None = None) -> int: ...
     def interrupt_stale_runs(self) -> int: ...
     def sync_lock(self, source: str): ...
     def log_question(
@@ -671,6 +674,28 @@ class PgStore:
         return DocRow(r[0], r[1], r[2], r[3], r[4], Acl(frozenset(r[5]), frozenset(r[9])), r[6], float(r[7]), r[8],
                       _meta_from(r[10:]))
 
+    def principal_counts(self):
+        """(source, principal, documents autorisés, documents refusés) de l'index."""
+        sql = """
+            SELECT source, p, sum(a)::int, sum(d)::int FROM (
+                SELECT source, unnest(acl_groups) AS p, 1 AS a, 0 AS d FROM documents WHERE status = %(s)s
+                UNION ALL
+                SELECT source, unnest(acl_deny), 0, 1 FROM documents WHERE status = %(s)s
+            ) t GROUP BY source, p ORDER BY source, sum(a) DESC, p"""
+        with self._conn() as conn:
+            return [tuple(r) for r in conn.execute(sql, {"s": Status.INDEXED}).fetchall()]
+
+    def visible_counts(self, groups):
+        """Documents indexés visibles avec ces principaux, par source."""
+        if not groups:
+            return {}
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT source, count(*) FROM documents WHERE status = %s AND acl_groups && %s::text[] "
+                "AND NOT acl_deny && %s::text[] GROUP BY source", (Status.INDEXED, sorted(groups), sorted(groups)),
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
     def stats(self) -> dict[str, Counter]:
         with self._conn() as conn:
             rows = conn.execute("SELECT source, status, count(*) FROM documents GROUP BY source, status").fetchall()
@@ -730,15 +755,21 @@ class PgStore:
                 (status, json.dumps(report) if report is not None else None, message, run_id),
             )
 
-    def list_runs(self, source=None, limit=20):
+    def count_runs(self, source=None):
+        with self._conn() as conn:
+            if source:
+                return conn.execute("SELECT count(*) FROM sync_runs WHERE source = %s", (source,)).fetchone()[0]
+            return conn.execute("SELECT count(*) FROM sync_runs").fetchone()[0]
+
+    def list_runs(self, source=None, limit=20, offset=0):
         sql = ("SELECT id, source, extract(epoch FROM started_at), extract(epoch FROM finished_at), "
                "status, report, message FROM sync_runs")
         params: list = []
         if source:
             sql += " WHERE source = %s"
             params.append(source)
-        sql += " ORDER BY started_at DESC, id DESC LIMIT %s"
-        params.append(limit)
+        sql += " ORDER BY started_at DESC, id DESC LIMIT %s OFFSET %s"
+        params += [limit, offset]
         with self._conn() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [
@@ -1085,6 +1116,24 @@ class MemoryStore:
         return DocRow(key[0], key[1], s.path, d["status"], s.size, s.acl, len(self.chunks.get(key, [])),
                       d["indexed_at"], d["error"], d.get("meta"))
 
+    def principal_counts(self):
+        counts: dict[tuple[str, str], list[int]] = {}
+        for (src, _), d in self.docs.items():
+            if d["status"] != Status.INDEXED:
+                continue
+            for p in d["state"].acl.allow:
+                counts.setdefault((src, p), [0, 0])[0] += 1
+            for p in d["state"].acl.deny:
+                counts.setdefault((src, p), [0, 0])[1] += 1
+        return sorted(((s, p, a, d) for (s, p), (a, d) in counts.items()), key=lambda r: (r[0], -r[2], r[1]))
+
+    def visible_counts(self, groups):
+        out: dict[str, int] = {}
+        for (src, _), d in self.docs.items():
+            if d["status"] == Status.INDEXED and groups and d["state"].acl.permits(groups):
+                out[src] = out.get(src, 0) + 1
+        return out
+
     def stats(self):
         out: dict[str, Counter] = {}
         for (src, _), d in list(self.docs.items()):
@@ -1120,9 +1169,12 @@ class MemoryStore:
             r = self.runs[run_id - 1]
             self.runs[run_id - 1] = SyncRun(r.id, r.source, r.started_at, time.time(), status, report, message)
 
-    def list_runs(self, source=None, limit=20):
+    def list_runs(self, source=None, limit=20, offset=0):
         runs = [r for r in reversed(self.runs) if not source or r.source == source]
-        return runs[:limit]
+        return runs[offset : offset + limit]
+
+    def count_runs(self, source=None):
+        return sum(1 for r in self.runs if not source or r.source == source)
 
     def sync_lock(self, source):
         lock = self._sync_locks.setdefault(source, threading.Lock())

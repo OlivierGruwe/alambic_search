@@ -143,11 +143,20 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outl
 /* --- Documents -------------------------------------------------------------------- */
 
 .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 24px; align-items: start; }
-.panel { position: sticky; top: 24px; }
+.panel { position: sticky; top: calc(var(--al-bar-h, 56px) + 24px); }
 .panel:empty::before { content: "Sélectionnez un document pour voir son détail : statut, droits et extraits indexés."; display: block; color: var(--ink-2); font-size: .93rem; padding: 22px 24px; border: 1px dashed var(--line-2); border-radius: 8px; }
 .chunk { border-top: 1px solid var(--line); padding: 12px 0; font-size: .9rem; }
 .chunk p { margin: 4px 0 0; white-space: pre-line; color: #26354f; }
-.pager { display: flex; gap: 12px; align-items: center; justify-content: flex-end; margin-top: 14px; font-size: .9rem; color: var(--ink-2); }
+.pager { display: flex; gap: 4px; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin-top: 14px; font-size: .9rem; color: var(--ink-2); }
+.pager a, .pager .cur, .pager .off { min-width: 32px; height: 32px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius); text-decoration: none; }
+.pager a { color: var(--ink); border: 1px solid var(--line); background: var(--surface, #fff); }
+.pager a:hover { border-color: var(--accent, currentColor); }
+.pager .cur { background: var(--accent, #1d4ed8); color: #fff; font-weight: 600; }
+.pager .off { color: var(--ink-3, #aaa); }
+.pager .gap { padding: 0 4px; }
+.list-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.list-foot .pager { margin-top: 0; }
+.list-foot select { width: auto; }
 .error-box { background: var(--red-soft); color: var(--red); border-radius: var(--radius); padding: 10px 14px; font-size: .9rem; }
 
 /* --- Bac à sable ------------------------------------------------------------------ */
@@ -275,3 +284,11 @@ a.thumb:hover, a.thumb:focus-visible { border-color: var(--al-accent, #A9561F); 
 .conv-note { margin: 0 0 10px; font-style: italic; }
 .conv-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
   margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+
+/* Page Droits */
+.rights-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+.rights-sides h3 { font-size: .95rem; margin: 0 0 8px; }
+.rights-sides tr.current td { background: var(--al-ok-soft); }
+.rights-source { border-top: 1px solid var(--line); padding: 10px 0; }
+.rights-source > summary { cursor: pointer; padding: 4px 0; }
+.rights-source[open] > summary { margin-bottom: 8px; }

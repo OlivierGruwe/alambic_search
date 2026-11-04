@@ -29,7 +29,8 @@ def test_console_requires_credentials(connector, store, embedder):
 def test_static_assets_are_public(connector, store, embedder):
     c, _ = client_for(connector, store, embedder)
     for path in ("console.css", "htmx.min.js", "favicon.svg", "alambic-ui/alambic.css", "alambic-ui/alambic.js",
-                 "alambic-ui/fonts/plex-sans-400.woff2", "alambic-ui/fonts/comfortaa-700.woff2"):
+                 "alambic-ui/fonts/plex-sans-400.woff2", "alambic-ui/fonts/comfortaa-700.woff2",
+                 "alambic-ui/img/arondor.png", "alambic-ui/img/arondor-blanc.png"):
         assert c.get(f"/admin/static/{path}").status_code == 200, path
 
 
