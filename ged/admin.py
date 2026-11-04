@@ -14,7 +14,7 @@ from dataclasses import asdict
 from ged.embeddings import Embedder
 from ged.models import RunStatus
 from ged.store import Store
-from ged.sync import MassDeletionGuard, Progress, sync_source
+from ged.sync import MassDeletionGuard, Progress, SyncInterrupted, sync_source
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ class SyncManager:
         self._clock = clock
         self.auto_sync_empty = auto_sync_empty  # instance qui planifie : index vide → tout synchroniser
         self._stop = threading.Event()
+        self._cancel = threading.Event()  # arrêt du service : synchros en cours interrompues proprement
         self._scheduler: threading.Thread | None = None
         self.converter = converter  # conversion PDF des fichiers bureautiques, ou None
         self.store = store
@@ -131,6 +132,17 @@ class SyncManager:
         self._stop.set()
         self._scheduler = None
 
+    def shutdown(self, timeout: float = 25.0) -> None:
+        """Arrêt du service : interrompt les synchros en cours (documents non traités laissés tels
+        quels, passage noté « interrompu ») et attend leur fin avant la fermeture des clients HTTP."""
+        self.stop_scheduler()
+        self._cancel.set()
+        deadline = time.monotonic() + timeout
+        for source, t in list(self._threads.items()):
+            if t.is_alive():
+                log.info("Arrêt : fin de la synchronisation de %s…", source)
+                t.join(max(0.0, deadline - time.monotonic()))
+
     def progress(self, source: str) -> dict | None:
         """Avancement de la synchro en cours de la source, ou None."""
         p = self._progress.get(source)
@@ -152,9 +164,12 @@ class SyncManager:
         try:
             report = sync_source(self.connectors[source], self.store, self.embedder,
                                  analyzer=self.analyzer, converter=self.converter,
-                                 max_delete_ratio=max_delete_ratio, progress=self._progress[source])
+                                 max_delete_ratio=max_delete_ratio, progress=self._progress[source],
+                                 cancel=self._cancel)
             status = RunStatus.PARTIAL if report.errors else RunStatus.OK
             self.store.finish_run(run_id, status, asdict(report))
+        except SyncInterrupted as exc:
+            self.store.finish_run(run_id, RunStatus.INTERRUPTED, asdict(exc.report), message=str(exc))
         except MassDeletionGuard as exc:
             self.store.finish_run(run_id, RunStatus.BLOCKED, message=str(exc))
         except Exception as exc:  # source injoignable, base indisponible...

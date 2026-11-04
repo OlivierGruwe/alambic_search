@@ -3,8 +3,14 @@
 # Les valeurs générées ne sont affichées qu'une fois : les noter dans le coffre de l'équipe.
 set -eu
 
-docker network inspect alambic >/dev/null 2>&1 || \
-  docker network create --driver overlay --attachable --opt encrypted alambic
+# Réseau partagé avec Light, chiffré sauf STACK_CHIFFRE=0 (Docker Desktop : pas de module IPsec)
+if ! docker network inspect alambic >/dev/null 2>&1; then
+  if [ "${STACK_CHIFFRE:-1}" = 0 ]; then
+    docker network create --driver overlay --attachable alambic
+  else
+    docker network create --driver overlay --attachable --opt encrypted alambic
+  fi
+fi
 
 gen() { head -c 32 /dev/urandom | base64 | tr -d '\n=+/' | cut -c1-40; }
 key() { head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n='; }
@@ -27,12 +33,13 @@ if ! docker secret inspect search_secrets_key >/dev/null 2>&1; then
   echo "    $SK"
 fi
 creer search_secrets_key "$SK"
-printf "Mot de passe de la console /admin (vide = généré) : "; read -r ADMIN || true
-creer search_admin_password "${ADMIN:-$(gen)}"
-printf "Mot de passe administrateur Keycloak (vide = généré) : "; read -r KCADMIN || true
-creer keycloak_admin_password "${KCADMIN:-$(gen)}"
-printf "Secret du client OIDC alambic-search (Keycloak → Clients → Credentials) : "; read -r OIDC || true
-creer search_oidc_client_secret "${OIDC:-a-definir}"
+printf "Mot de passe du compte « admin », créé au premier démarrage (vide = généré, affiché) : "; read -r ADMIN || true
+if [ -z "${ADMIN:-}" ] && ! docker secret inspect search_admin_password >/dev/null 2>&1; then
+  ADMIN="$(gen)"; echo "  mot de passe de « admin » : $ADMIN"
+fi
+creer search_admin_password "${ADMIN:-inchange}"
+printf "Clé d'API du LLM en ligne, ex. Mistral AI (vide : LLM local, Ollama) : "; read -r LLMKEY || true
+creer search_llm_api_key "${LLMKEY:-aucune}"
 printf "Clé d'API d'Alambic Light (vide si pas encore connue) : "; read -r LIGHT || true
 creer search_light_api_key "${LIGHT:-a-definir}"
 echo "Terminé. Valeurs lisibles plus tard : non (Docker ne les rend jamais) — d'où le coffre."

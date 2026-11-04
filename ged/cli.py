@@ -13,7 +13,7 @@ def main(argv: list[str] | None = None) -> int:
     from ged.config import Settings, load_analyzer, load_converter
     from ged.convert import OFFICE_EXTENSIONS
     from ged.embeddings import OpenAICompatEmbedder
-    from ged.llm import OpenAICompatLLM
+    from ged.llm import load_llm
     from ged.store import PgStore
     from ged.sync import MassDeletionGuard, sync_source
 
@@ -39,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
     p_gen.add_argument("--n", type=int, default=30, help="Nombre de questions (défaut 30)")
     p_gen.add_argument("--source", help="Limiter à une source")
     p_gen.add_argument("--sortie", required=True, help="Fichier YAML à écrire (brouillon)")
+    p_acc = sub.add_parser("compte", help="Crée un compte, ou redéfinit son mot de passe (accès perdu à la console)")
+    p_acc.add_argument("login")
+    p_acc.add_argument("--role", choices=["utilisateur", "gestionnaire", "admin"],
+                       help="Rôle (création : utilisateur par défaut ; compte existant : inchangé sauf si précisé)")
+    p_acc.add_argument("--nom", default="", help="Nom affiché (création)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -62,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
 
     store = PgStore(s.database_url, s.embed_dim)
     store.init()
+    if args.cmd == "compte":
+        return _account(store, args)
     embedder = OpenAICompatEmbedder(s.embed_base_url, s.embed_model, s.embed_dim)
 
     if args.cmd == "sync":
@@ -115,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         return _evaluation(args, s, store, embedder)
 
     groups = frozenset(g.strip() for g in args.groups.split(",") if g.strip())
-    llm = OpenAICompatLLM(s.llm_base_url, s.llm_model) if s.llm_model else None
+    llm = load_llm(s)
     from ged.rerank import load_reranker
 
     answer = ask(args.question, groups, store, embedder, llm, generate=not args.extraits, reranker=load_reranker())
@@ -132,9 +139,9 @@ def _evaluation(args, s, store, embedder) -> int:
 
     from ged import evaluation as ev
     from ged.config import load_identity
-    from ged.llm import OpenAICompatLLM
+    from ged.llm import load_llm
 
-    llm = OpenAICompatLLM(s.llm_base_url, s.llm_model) if s.llm_model else None
+    llm = load_llm(s)
     if args.cmd == "eval-generer":
         if llm is None:
             print("Génération impossible sans LLM (LLM_MODEL vide)", file=sys.stderr)
@@ -201,3 +208,34 @@ def _evaluation(args, s, store, embedder) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _account(store, args, read_password=None) -> int:
+    """Crée le compte ou redéfinit son mot de passe (saisi deux fois, jamais en argument)."""
+    import getpass
+
+    from ged.accounts import AccountError, Accounts
+    from ged.models import Role
+
+    read_password = read_password or getpass.getpass
+    accounts = Accounts(store)
+    password = read_password("Mot de passe (10 caractères au moins) : ")
+    if password != read_password("Confirmation : "):
+        print("Les deux saisies diffèrent.", file=sys.stderr)
+        return 2
+    try:
+        user = store.get_user(args.login)
+        if user is None:
+            user = accounts.create(args.login, args.nom, args.role or Role.USER, password)
+            print(f"Compte « {user.login} » créé ({Role.LABELS[user.role]}).")
+            return 0
+        accounts.set_password(user, password)
+        if args.role and args.role != user.role:
+            user.role = args.role
+        user.active = True  # compte de secours : réactivé
+        store.update_user(user)
+        print(f"Compte « {user.login} » : mot de passe redéfini ({Role.LABELS[user.role]}, actif).")
+        return 0
+    except AccountError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2

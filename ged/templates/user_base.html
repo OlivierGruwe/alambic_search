@@ -11,8 +11,17 @@
 </head>
 <body class="al-app">
 {% include "_bandeau.html" %}
+{% if bandeau(request).user %}
+<div class="al-shell">
+  {% include "_nav.html" %}
+  <main class="al-main" id="main"><div class="user-main">
+    {% block content %}{% endblock %}
+  </div></main>
+</div>
+{% else %}
 <main class="user-main" id="main">
-  {% block content %}{% endblock %}
+  {{ self.content() }}
 </main>
+{% endif %}
 </body>
 </html>

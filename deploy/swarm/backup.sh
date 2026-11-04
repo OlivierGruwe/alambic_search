@@ -1,5 +1,5 @@
 #!/bin/sh
-# Sauvegarde quotidienne des bases ged et keycloak (pg_dump, format custom), rétention en jours.
+# Sauvegarde quotidienne de la base ged (index, sources, comptes) (pg_dump, format custom), rétention en jours.
 # Restauration : voir l'onglet Exploitation du dossier (pg_restore).
 set -eu
 export PGPASSWORD="$(cat "$PGPASSFILE_SECRET")"
@@ -9,7 +9,7 @@ echo "Sauvegarde quotidienne à ${HOUR}h, conservation ${KEEP} jours, dans /back
 until pg_isready -q; do sleep 5; done
 while true; do
   if [ "$(date +%H)" = "$HOUR" ] && [ ! -f "/backups/.fait-$(date +%F)" ]; then
-    for base in ged keycloak; do
+    for base in ged; do
       fichier="/backups/${base}-$(date +%F-%H%M).dump"
       if pg_dump -Fc -d "$base" -f "${fichier}.tmp"; then
         mv "${fichier}.tmp" "$fichier"

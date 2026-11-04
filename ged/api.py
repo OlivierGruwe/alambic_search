@@ -1,13 +1,15 @@
 """API HTTP du POC + console d'administration (/admin).
 
-AUTHENTIFICATION des utilisateurs : connexion avec le compte Windows (page /connexion,
-mot de passe vérifié par l'annuaire), puis cookie de session signé. Les groupes viennent de
-l'annuaire pour le compte connecté : l'utilisateur ne peut pas les choisir.
+AUTHENTIFICATION : comptes d'Alambic Search (console, page Utilisateurs), avec trois façons de
+se présenter (ged/auth.py) :
+- session : page /connexion, puis cookie signé ;
+- clé d'API : `Authorization: Bearer als_…` ou `X-API-Key: als_…` (créée dans « Mon compte ») ;
+- identifiant et mot de passe : HTTP Basic.
+Les droits sur les documents viennent du compte (AD rattaché et/ou groupes saisis par
+l'administrateur) : l'appelant ne peut pas les choisir.
 
 En-têtes `X-User` / `X-User-Groups` : acceptés SEULEMENT si TRUST_IDENTITY_HEADERS=true, c.-à-d.
-derrière un proxy de confiance qui les pose lui-même (sinon n'importe qui pourrait se déclarer
-membre de « direction »). Désactivés par défaut.
-Plus tard : connexion Windows automatique (Kerberos) et Entra ID / Keycloak (OIDC).
+derrière un proxy de confiance qui les pose lui-même. Désactivés par défaut.
 """
 from __future__ import annotations
 
@@ -72,8 +74,7 @@ def create_app(
     admin_password: str | None = None, identity=None, analyzer=None, converter=None,
     schedule: dict[str, float] | None = None,
     session_secret: str | None = None, cookie_secure: bool = False, trust_headers: bool | None = None,
-    source_factory=None, yaml_sources: list[dict] | None = None, oidc=None, portal: list[dict] | None = None,
-    secret_box=None, reranker=None, scheduler: bool = True, auto_sync_empty: bool = False,
+    source_factory=None, yaml_sources: list[dict] | None = None, secret_box=None, reranker=None, scheduler: bool = True, auto_sync_empty: bool = False,
 ) -> FastAPI:
     import os
 
@@ -82,21 +83,27 @@ def create_app(
     if trust_headers is None:
         trust_headers = os.environ.get("TRUST_IDENTITY_HEADERS", "").lower() in ("1", "true", "oui", "yes")
     sessions = Sessions(session_secret, secure=cookie_secure)
-    throttle = LoginThrottle()
+    from ged.accounts import Accounts
     from ged.auth import Auth
 
-    auth = Auth(sessions, identity, oidc, trust_headers=trust_headers)
+    accounts = Accounts(store, identity)
+    accounts.bootstrap(admin_password)  # premier démarrage : compte « admin » (ADMIN_PASSWORD)
+    auth = Auth(sessions, accounts, identity, trust_headers=trust_headers, throttle=LoginThrottle())
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if scheduler:  # SCHEDULER_ENABLED=false : instance web seule (Swarm : le service worker planifie)
             manager.start_scheduler()
         yield
-        manager.stop_scheduler()
+        # Arrêt (mise à jour, redémarrage par Swarm) : synchros en cours interrompues proprement AVANT
+        # de fermer les clients HTTP, sinon leurs documents passent en erreur (« client has been closed »)
+        import asyncio
+
+        await asyncio.to_thread(manager.shutdown, float(os.environ.get("SHUTDOWN_WAIT", "25")))
         if hasattr(store, "close"):  # rend les connexions du pool à l'arrêt
             store.close()
-        for client in (analyzer, converter, reranker):
-            if client is not None:
+        for client in (analyzer, converter, reranker, llm):
+            if client is not None and hasattr(client, "close"):
                 client.close()
 
     app = FastAPI(title="Alambic Search", lifespan=lifespan)
@@ -125,7 +132,7 @@ def create_app(
 
     def user_groups(request: Request, x_user: str = Header(default=""),
                     x_user_groups: str = Header(default="")) -> frozenset[str]:
-        """Principaux de l'appelant : session, jeton porteur OIDC, ou en-têtes de confiance (ged/auth.py)."""
+        """Principaux de l'appelant : session, clé d'API, HTTP Basic, ou en-têtes de confiance (ged/auth.py)."""
         return auth.request_principals(request, x_user, x_user_groups)
 
     from ged.thumbs import PLACEHOLDER, ThumbCache, fit_width, render
@@ -169,53 +176,23 @@ def create_app(
     from ged.ui import build_router, mount_static
 
     mount_static(app)  # logo, polices, css, htmx : publics
-    def admin_session(request: Request) -> bool:
-        """Rôle Keycloak « <client>:admin » (ex. alambic-search:admin) : accès à la console sans mot de passe."""
-        session = auth.session(request)
-        return bool(oidc and session and f"{oidc.client_id}:admin" in session.get("r", []))
-
-    def session_roles(request: Request) -> list[str] | None:
-        """Rôles Keycloak de l'utilisateur connecté ; None sans session (console par mot de passe)."""
-        session = auth.session(request)
-        return None if session is None else list(session.get("r", []))
-
-    app.include_router(build_router(store, embedder, llm, connectors, manager, admin_password, identity, analyzer,
-                                    converter, catalog, admin_session, session_roles, thumbnail, reranker))
-
+    app.include_router(build_router(store, embedder, llm, connectors, manager, auth, identity, analyzer,
+                                    converter, catalog, thumbnail, reranker))
 
     @app.get("/health")
-    def health():
+    async def health():
+        """Contrôle de santé (Swarm). Asynchrone : ne passe pas par le pool de fils des requêtes,
+        donc répond même quand l'instance est occupée (synchro, questions longues)."""
         return {"status": "ok", "sources": sorted(connectors), "llm": llm is not None}
 
-    from fastapi.security import HTTPBasic, HTTPBasicCredentials
+    from ged.models import Role
 
-    basic = HTTPBasic(auto_error=False)
+    def require_api_manager(request: Request) -> None:
+        """Opérations de gestion par l'API : rôle gestionnaire ou administrateur (session, clé
+        d'API ou identifiant et mot de passe)."""
+        auth.require(request, Role.MANAGER)
 
-    def require_api_admin(request: Request, creds: HTTPBasicCredentials | None = Depends(basic)) -> None:
-        """Opérations d'administration par l'API : rôle Keycloak « <client>:admin » (session ou
-        jeton porteur), ou utilisateur « admin » avec ADMIN_PASSWORD (HTTP Basic)."""
-        import secrets as _secrets
-
-        if admin_session(request):
-            return
-        bearer = request.headers.get("authorization", "")
-        if oidc is not None and bearer.lower().startswith("bearer "):
-            from ged.oidc import OidcError
-
-            try:
-                user = oidc.user(oidc.validate_access_token(bearer[7:].strip()))
-            except OidcError as exc:
-                raise HTTPException(401, str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
-            if f"{oidc.client_id}:admin" in user.roles:
-                return
-            raise HTTPException(403, f"Rôle {oidc.client_id}:admin requis")
-        if admin_password and creds is not None and creds.username == "admin" and \
-                _secrets.compare_digest(creds.password.encode(), admin_password.encode()):
-            return
-        raise HTTPException(401, "Administrateur requis (HTTP Basic admin / ADMIN_PASSWORD, ou rôle admin Keycloak)",
-                            headers={"WWW-Authenticate": 'Basic realm="Alambic Search"'})
-
-    @app.post("/sources/{name}/sync", dependencies=[Depends(require_api_admin)])
+    @app.post("/sources/{name}/sync", dependencies=[Depends(require_api_manager)])
     def sync(name: str):
         """Synchro bloquante (scripts, cron). La console utilise la version en arrière-plan."""
         connector = connectors.get(name)
@@ -257,15 +234,9 @@ def create_app(
         return f"{'/admin' if admin else ''}/vignettes/{source}/{doc_path(doc_id)}?page={page or 1}"
 
     templates.env.globals["thumb_url"] = thumb_url
-    # Droits : d'où viennent les groupes des utilisateurs (page Droits de la console)
-    templates.env.globals["oidc_groups_mode"] = oidc.groups_mode if oidc is not None else None
+    templates.env.globals["bandeau"] = lambda request: build_context(request, auth)
 
-    # Bandeau commun Alambic (applications selon les rôles, client, utilisateur) dans toutes les pages
-    templates.env.globals["bandeau"] = lambda request: build_context(
-        request, auth, portal or [], admin_client_id=oidc.client_id if oidc else None)
-
-    app.include_router(build_user_router(store, embedder, llm, auth, throttle, document_url, portal or [],
-                                         reranker=reranker))
+    app.include_router(build_user_router(store, embedder, llm, auth, document_url, reranker=reranker))
 
     def _criteria_json(r) -> dict:
         return {
@@ -418,14 +389,12 @@ def app_from_env() -> FastAPI:
         load_analyzer,
         load_converter,
         load_identity,
-        load_oidc,
-        load_portal,
         read_sources,
         source_extensions,
     )
     from ged.convert import OFFICE_EXTENSIONS
     from ged.embeddings import OpenAICompatEmbedder
-    from ged.llm import OpenAICompatLLM
+    from ged.llm import load_llm
     from ged.store import PgStore
 
     log = logging.getLogger("alambic_search")
@@ -436,25 +405,40 @@ def app_from_env() -> FastAPI:
     store = PgStore(s.database_url, s.embed_dim)
     safe_url = re.sub(r"//([^:/@]+):[^@]*@", r"//\1:***@", s.database_url)
     log.info("Connexion à la base %s…", safe_url)
-    try:
-        store.init()
-    except (psycopg.OperationalError, PoolTimeout) as exc:
-        raise SystemExit(
-            f"\nImpossible de se connecter à PostgreSQL ({safe_url}).\n"
-            "  - En local : lancer la base du projet avec `make db` (port 5433),\n"
-            "    ou corriger DATABASE_URL dans .env (voir .env.example).\n"
-            "  - La base doit disposer de l'extension pgvector.\n"
-            f"Détail : {str(exc).splitlines()[0]}\n"
-        ) from None
+    # Base pas encore prête (Swarm : services démarrés ensemble, initialisation de PostgreSQL) :
+    # on patiente DB_WAIT secondes plutôt que de planter et redémarrer en boucle.
+    deadline = time.monotonic() + float(os.environ.get("DB_WAIT", "90"))
+    while True:
+        try:
+            store.init()
+            break
+        except (psycopg.OperationalError, PoolTimeout) as exc:
+            store.close()  # pool neuf à l'essai suivant
+            detail = str(exc).splitlines()[0]
+            if time.monotonic() >= deadline:
+                raise SystemExit(
+                    f"\nImpossible de se connecter à PostgreSQL ({safe_url}).\n"
+                    "  - En local : lancer la base du projet avec `make db` (port 5433),\n"
+                    "    ou corriger DATABASE_URL dans .env (voir .env.example).\n"
+                    "  - Swarm : vérifier le service base (make stack-ps, docker service ps <stack>_db).\n"
+                    "  - La base doit disposer de l'extension pgvector.\n"
+                    f"Détail : {detail}\n"
+                ) from None
+            log.warning("Base pas encore joignable (%s) : nouvel essai dans 5 s", detail)
+            time.sleep(5)
     log.info("Base prête. Lecture de la configuration %s…", s.sources_file)
     try:
         converter = load_converter(s)
         extra = OFFICE_EXTENSIONS if converter else frozenset()
         extensions = source_extensions(s.sources_file, extra)
         identity = load_identity(s.sources_file)
+        from ged.config import _read
+
+        for old in ("oidc", "portail"):
+            if os.path.isfile(s.sources_file) and _read(s.sources_file).get(old):
+                log.warning("sources.yaml : section « %s » ignorée (connexion unique et portail retirés : "
+                            "comptes gérés dans la console, page Utilisateurs)", old)
         analyzer = load_analyzer(s.sources_file)
-        oidc = load_oidc(s.sources_file)
-        portal = load_portal(s.sources_file)
         # Sources : en base. sources.yaml n'est lu que pour l'import du premier démarrage.
         yaml_sources = read_sources(s.sources_file) if os.path.isfile(s.sources_file) else []
     except yaml.YAMLError as exc:
@@ -472,13 +456,14 @@ def app_from_env() -> FastAPI:
         ) from None
     except (ConfigError, OSError) as exc:
         raise SystemExit(f"\nConfiguration invalide ({s.sources_file}) : {exc}\n") from None
-    if portal:
-        log.info("Portail : %s", ", ".join(f"{a['nom']} ({a['role'] or 'tous'})" for a in portal))
-    if oidc is not None:
-        ok, detail = oidc.check()
-        (log.info if ok else log.warning)("Connexion unique (OIDC) : %s", detail)
-    log.info("Réponses : %s", f"formulées par {s.llm_model}" if s.llm_model
-             else "extraits pertinents sans formulation (LLM_MODEL vide)")
+    llm = load_llm(s)
+    if llm is None:
+        log.info("Réponses : extraits pertinents sans formulation (LLM_MODEL vide)")
+    elif llm.remote:
+        log.info("Réponses : formulées par %s — service en ligne : la question et les extraits autorisés "
+                 "lui sont envoyés (les vecteurs restent calculés en local)", llm.describe())
+    else:
+        log.info("Réponses : formulées par %s", llm.describe())
     try:
         import pypdfium2  # noqa: F401
 
@@ -521,7 +506,7 @@ def app_from_env() -> FastAPI:
     app = create_app(
         store,
         OpenAICompatEmbedder(s.embed_base_url, s.embed_model, s.embed_dim),
-        OpenAICompatLLM(s.llm_base_url, s.llm_model) if s.llm_model else None,
+        llm,
         {},  # sources : chargées depuis la base par la console (SourceCatalog)
         admin_password=os.environ.get("ADMIN_PASSWORD") or None,
         session_secret=os.environ.get("SESSION_SECRET") or None,
@@ -531,8 +516,6 @@ def app_from_env() -> FastAPI:
         converter=converter,
         source_factory=lambda cfg: build_connector(cfg, extensions),
         yaml_sources=yaml_sources,
-        oidc=oidc,
-        portal=portal,
         secret_box=secret_box,
         reranker=reranker,
         scheduler=os.environ.get("SCHEDULER_ENABLED", "true").lower() not in ("0", "false", "non", "no", "off"),

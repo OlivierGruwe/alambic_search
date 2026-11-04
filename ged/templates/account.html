@@ -1,0 +1,50 @@
+{% extends "user_base.html" %}
+{% block title %}Mon compte{% endblock %}
+{% from "_macros.html" import label, api_keys %}
+{% block content %}
+<div class="account-main">
+<header class="page-head">
+  <div>
+    <h1>Mon compte</h1>
+    <p class="lede">Votre mot de passe, et les clés d'API qui permettent à une application ou à un script d'interroger Alambic Search avec vos droits.</p>
+  </div>
+</header>
+
+<div class="account-grid">
+  <section class="section" aria-labelledby="me-title">
+    <h2 id="me-title">Identité</h2>
+    <dl class="kv">
+      <dt>Identifiant</dt><dd>{{ user.login }}</dd>
+      <dt>Nom</dt><dd>{{ user.name }}</dd>
+      <dt>Rôle</dt><dd>{{ {"utilisateur": "Utilisateur", "gestionnaire": "Gestionnaire", "admin": "Administrateur"}[user.role] }}</dd>
+      <dt>Compte Windows</dt><dd>{{ user.ad_login or "non rattaché" }}</dd>
+      {% if user.groups %}<dt>Groupes</dt><dd><span class="groups">{% for g in user.groups %}<span class="group">{{ g }}</span>{% endfor %}</span></dd>{% endif %}
+    </dl>
+    <p class="hint" style="margin-top: 12px">Rôle, rattachement et groupes sont réglés par un administrateur.</p>
+  </section>
+
+  <section class="section" aria-labelledby="pw-title">
+    <h2 id="pw-title">Mot de passe</h2>
+    {% if pw_ok %}<p class="notice notice-ok" role="status">{{ pw_ok }}</p>{% endif %}
+    {% if pw_error %}<div class="error-box" role="alert" style="margin-bottom: 12px">{{ pw_error }}</div>{% endif %}
+    <form class="login-form" method="post" action="/compte/mot-de-passe" style="margin-top: 8px">
+      {% if user.password_hash %}
+      <div class="field"><label for="p-cur">Mot de passe actuel</label>
+        <input id="p-cur" name="actuel" type="password" required autocomplete="current-password"></div>
+      {% endif %}
+      <div class="field">{{ label("p-new", "Nouveau mot de passe", "10 caractères au moins. Une phrase de quelques mots est plus sûre et plus facile à retenir qu'un mot compliqué.") }}
+        <input id="p-new" name="nouveau" type="password" required minlength="10" autocomplete="new-password"></div>
+      <div class="field"><label for="p-conf">Confirmation</label>
+        <input id="p-conf" name="confirmation" type="password" required minlength="10" autocomplete="new-password"></div>
+      <button class="btn" type="submit">Changer le mot de passe</button>
+    </form>
+  </section>
+</div>
+
+<section class="section" aria-labelledby="keys-title">
+  <h2 id="keys-title">Clés d'API</h2>
+  {% if key_ok %}<p class="notice notice-ok" role="status">{{ key_ok }}</p>{% endif %}
+  {{ api_keys(keys, now, "/compte", new_key) }}
+</section>
+</div>
+{% endblock %}

@@ -3,26 +3,20 @@
 {% block content %}
 <section class="section login-card" aria-labelledby="login-title">
   <h1 id="login-title">Connexion</h1>
+  <p class="lede">Avec votre compte Alambic Search. Vous ne verrez que les documents que vous êtes autorisé à lire.</p>
   {% if info %}<div class="test-box ok" role="status" style="margin-top: 16px">{{ info }}</div>{% endif %}
-  {% if not available %}
-  <div class="error-box" style="margin-top: 16px">{{ no_identity }}</div>
-  {% elif oidc %}
-  <p class="lede">Avec votre compte d'entreprise. Une seule connexion donne accès à toutes les applications Alambic auxquelles vous avez droit.</p>
-  {% if error %}<div class="error-box" role="alert" style="margin-top: 16px">{{ error }}</div>{% endif %}
-  <a class="btn" style="margin-top: 20px; display: inline-block" href="/connexion/keycloak?suite={{ suite|urlencode }}">Se connecter</a>
-  {% else %}
-  <p class="lede">Avec votre compte Windows. Vous ne verrez que les documents que vous êtes autorisé à lire.</p>
+  {% if no_account %}<div class="error-box" style="margin-top: 16px">Aucun compte n'existe encore. Définissez ADMIN_PASSWORD et redémarrez : le compte « admin » sera créé avec ce mot de passe. Ou, sur le serveur : <code>alambic-search compte admin --role admin</code>.</div>{% endif %}
   {% if error %}<div class="error-box" role="alert" style="margin-top: 16px">{{ error }}</div>{% endif %}
   <form class="login-form" method="post" action="/connexion">
     <input type="hidden" name="suite" value="{{ suite }}">
     <div class="field"><label for="l-id">Identifiant</label>
       <input id="l-id" name="identifiant" value="{{ login }}" required autocomplete="username" autocapitalize="none"
-             spellcheck="false" placeholder="ex. alice ou CORP\alice" {% if not login %}autofocus{% endif %}></div>
+             spellcheck="false" {% if not login %}autofocus{% endif %}></div>
     <div class="field"><label for="l-pw">Mot de passe</label>
       <input id="l-pw" name="mot_de_passe" type="password" required autocomplete="current-password" {% if login %}autofocus{% endif %}></div>
     <button class="btn" type="submit">Se connecter</button>
   </form>
-  {% endif %}
+  <p class="hint" style="margin-top: 16px">Mot de passe oublié : demandez à un administrateur de vous en définir un nouveau.</p>
 </section>
 <p class="al-powered">Une solution <img src="/admin/static/alambic-ui/img/arondor.png" alt="Arondor" width="80" height="22"></p>
 {% endblock %}

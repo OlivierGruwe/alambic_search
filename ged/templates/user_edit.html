@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ u.login }}{% endblock %}
+{% from "_macros.html" import label, api_keys %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="sub"><a href="/admin/utilisateurs">Utilisateurs</a></p>
+    <h1>{{ u.login }}{% if not u.active %} <span class="status muted">Désactivé</span>{% endif %}</h1>
+    <p class="lede">Créé {{ u.created_at|when }} · dernière connexion : {{ u.last_login|when if u.last_login else "jamais" }}</p>
+  </div>
+</header>
+{% if notice %}<p class="notice notice-{{ notice[0] }}" role="status" style="margin-bottom: 16px">{{ notice[1] }}</p>{% endif %}
+
+<div class="rights-sides">
+  <section class="section" aria-labelledby="edit-title">
+    <h2 id="edit-title">Compte</h2>
+    <form class="sandbox-form" method="post" action="/admin/utilisateurs/{{ u.id }}" autocomplete="off">
+      <div class="field"><label for="e-name">Nom affiché</label><input id="e-name" name="nom" value="{{ u.name }}" maxlength="120"></div>
+      <div class="field">{{ label("e-role", "Rôle", "Utilisateur : recherche et API. Gestionnaire : en plus, la console. Administrateur : en plus, les comptes.") }}
+        <select id="e-role" name="role">{% for r in roles %}<option value="{{ r }}" {% if u.role == r %}selected{% endif %}>{{ role_labels[r] }}</option>{% endfor %}</select></div>
+      <div class="field">{{ label("e-ad", "Compte Windows", "Identifiant dans l'annuaire : le compte reçoit ses droits Windows (SID et groupes).") }}
+        <input id="e-ad" name="ad_login" value="{{ u.ad_login }}" maxlength="120" placeholder="non rattaché"></div>
+      <div class="field">{{ label("e-groups", "Groupes", "Noms de groupes séparés par des virgules (règles par dossier, GED).") }}
+        <input id="e-groups" name="groupes" value="{{ u.groups|join(', ') }}"></div>
+      <div class="field wide"><label class="check-label"><input type="checkbox" name="actif" value="true" {% if u.active %}checked{% endif %}> Compte actif</label>
+        <p class="hint">Désactivé : plus de connexion ni d'appel d'API ; sessions et clés cessent aussitôt de fonctionner.</p></div>
+      <div class="wide"><button class="btn" type="submit">Enregistrer</button></div>
+    </form>
+  </section>
+
+  <section class="section" aria-labelledby="rights-title">
+    <h2 id="rights-title">Ses droits sur les documents</h2>
+    {% if ad_error %}<div class="error-box" role="alert">L'annuaire n'a pas répondu ({{ ad_error }}).</div>
+    {% else %}
+    {% if u.ad_login and not has_identity %}<p class="notice notice-warn">Aucun annuaire configuré : le compte Windows « {{ u.ad_login }} » n'apporte aucun droit.</p>{% endif %}
+    {% if ad_unknown %}<p class="notice notice-warn">« {{ u.ad_login }} » est inconnu de l'annuaire : il n'apporte aucun droit.</p>{% endif %}
+    <p class="hint">{{ principals|length }} principaux.{% if not u.ad_login and not u.groups %} Ni compte Windows ni groupe : seuls les documents ouverts à tous lui sont visibles.{% endif %}</p>
+    <span class="groups">{% for p in principals[:60] %}<span class="group" title="{{ p }}">{{ pname(p) }}</span>{% endfor %}</span>
+    {% if principals|length > 60 %}<p class="hint">… et {{ principals|length - 60 }} autres.</p>{% endif %}
+    <p class="hint" style="margin-top: 12px"><a href="/admin/droits?login={{ u.login|urlencode }}">Ce qu'il voit, source par source</a></p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="section" aria-labelledby="pw-title">
+  <h2 id="pw-title">Mot de passe</h2>
+  <p class="hint">{% if u.password_hash %}Définir un nouveau mot de passe ferme ses sessions ouvertes.{% else %}Pas de mot de passe : ce compte n'utilise que des clés d'API.{% endif %}</p>
+  <form class="inline-form" method="post" action="/admin/utilisateurs/{{ u.id }}/mot-de-passe" autocomplete="off">
+    <div class="field"><label for="e-pw">Nouveau mot de passe</label><input id="e-pw" name="mot_de_passe" type="password" required minlength="10" autocomplete="new-password"></div>
+    <button class="btn" type="submit">Définir</button>
+  </form>
+</section>
+
+<section class="section" aria-labelledby="keys-title">
+  <h2 id="keys-title">Clés d'API</h2>
+  {{ api_keys(keys, now, "/admin/utilisateurs/" ~ u.id, new_key) }}
+</section>
+
+{% if me and me.id != u.id %}
+<section class="section">
+  <form method="post" action="/admin/utilisateurs/{{ u.id }}/supprimer" onsubmit="return confirm('Supprimer définitivement ce compte et ses clés d\'API ?')" style="margin: 0">
+    <button class="btn secondary danger" type="submit">Supprimer le compte</button>
+    <span class="hint">Pour une absence, préférez désactiver : le compte et ses réglages sont gardés.</span>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

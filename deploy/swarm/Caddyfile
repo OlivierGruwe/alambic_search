@@ -1,4 +1,4 @@
-# Entrée HTTPS d'Alambic Search et de Keycloak (certificats Let's Encrypt automatiques).
+# Entrée HTTPS d'Alambic Search (certificats Let's Encrypt automatiques).
 {
 	email {$ACME_EMAIL}
 }
@@ -16,12 +16,4 @@
 	reverse_proxy api:8000 {
 		fail_duration 10s
 	}
-}
-
-{$SSO_HOST} {
-	encode zstd gzip
-	# La console d'administration de Keycloak n'est pas exposée : passer par un tunnel SSH
-	@admin path /admin*
-	respond @admin 403
-	reverse_proxy keycloak:8080
 }

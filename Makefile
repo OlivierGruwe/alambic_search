@@ -14,7 +14,7 @@ SOURCE_OPT = $(if $(filter-out file,$(origin SOURCE)),--source $(SOURCE))
 # Base de test PostgreSQL/pgvector (make test-pg) : surcharger si besoin
 GED_TEST_DSN ?= postgresql://ged:ged@localhost:5433/ged
 
-.PHONY: sso light-check help install lock db db-gpu up-gpu gpu-check run test test-pg test-smb samba lint format check sync ask up down logs pull-models clean eval eval-init eval-reference eval-generer secrets-key secrets-rotate rerank rerank-gpu rerank-modele revectoriser image push stack-deploy stack-ps stack-logs stack-rollback
+.PHONY: compte light-check help install lock db db-gpu up-gpu gpu-check run test test-pg test-smb samba lint format check sync ask up down logs pull-models clean eval eval-init eval-reference eval-generer secrets-key secrets-rotate rerank rerank-gpu rerank-modele revectoriser image push stack-deploy stack-ps stack-logs stack-rollback
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -83,7 +83,9 @@ push: image ## Construit et pousse l'image vers le registre
 
 stack-deploy: ## Déploie ou met à jour la stack sur le Swarm (depuis un manager)
 	@test -f deploy/swarm/sources.yaml || (echo "Créer deploy/swarm/sources.yaml depuis sources.example.yaml" && exit 1)
-	$(stack_vars) && docker stack deploy -c deploy/swarm/stack.yml --with-registry-auth --prune $(STACK)
+	$(stack_vars) && docker stack deploy -c deploy/swarm/stack.yml \
+	  $$([ "$${STACK_GPU:-1}" = 0 ] || echo -c deploy/swarm/stack.gpu.yml) \
+	  $$([ "$${STACK_CHIFFRE:-1}" = 0 ] || echo -c deploy/swarm/stack.chiffre.yml) --with-registry-auth --prune $(STACK)
 
 stack-ps: ## État des services et des tâches de la stack
 	docker stack services $(STACK)
@@ -135,13 +137,8 @@ secrets-rotate: ## Rechiffre les secrets avec SECRETS_KEY (ancienne clé dans SE
 light-check: ## Teste la connexion à Alambic Light (section alambic_light de sources.yaml)
 	uv run $(ENV_FILE) alambic-search light-check
 
-sso: ## Démarre Keycloak (connexion unique) sur http://localhost:8180 — comptes de démo : demo
-	@docker network inspect alambic_sso >/dev/null 2>&1 || docker network create alambic_sso
-	# --force-recreate : un conteneur créé avec un ancien réseau alambic_sso (supprimé puis recréé)
-	# ne démarrerait plus ; les données de Keycloak sont dans son volume, conservées
-	docker compose --profile sso up -d --force-recreate keycloak
-	@echo "Console Keycloak : http://localhost:8180/admin (admin / KEYCLOAK_ADMIN_PASSWORD)"
-	@echo "Activer dans sources.yaml : section oidc (voir sources.example.yaml)"
+compte: ## Crée un compte ou redéfinit son mot de passe : make compte LOGIN=admin [ROLE=admin]
+	uv run $(ENV_FILE) alambic-search compte $(LOGIN) $(if $(ROLE),--role $(ROLE))
 
 ask: ## Pose une question : make ask Q="..." GROUPS=compta [EXTRAITS=1 : sans LLM]
 	uv run $(ENV_FILE) alambic-search ask "$(Q)" --groups "$(GROUPS)" $(if $(EXTRAITS),--extraits)

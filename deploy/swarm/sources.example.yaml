@@ -3,20 +3,16 @@
 # Les sources elles-mêmes se gèrent dans la console (/admin/sources) et vivent en base.
 # Modifier ce fichier → incrémenter CONFIG_VERSION dans stack.env, puis make stack-deploy.
 
-oidc:
-  url: https://sso.client.fr/realms/alambic
-  url_interne: http://keycloak:8080/realms/alambic
-  client_id: alambic-search
-  client_secret_env: OIDC_CLIENT_SECRET
-  groupes: jeton
+# Annuaire (facultatif) : droits Windows des comptes rattachés à un identifiant AD
+# identity:
+#   type: ldap
+#   url: ldaps://dc01.client.local
+#   base_dn: DC=client,DC=local
+#   bind_user: CLIENT\svc-alambic
+#   bind_password_env: LDAP_PASSWORD
 
 alambic_light:
   url: http://light_api:8000          # service de la stack « light », réseau partagé « alambic »
   api_key_env: ALAMBIC_LIGHT_API_KEY
   lien_validation: https://light.client.fr/validation?document={uuid}
   envoyer: tous
-
-portail:
-  - nom: Alambic Light — validation
-    url: https://light.client.fr/validation
-    role: alambic-light:validation

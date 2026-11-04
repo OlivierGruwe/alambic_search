@@ -1,9 +1,10 @@
 # Sources à indexer et annuaire. Copier en sources.yaml et adapter.
 # Les mots de passe ne figurent JAMAIS ici : seulement le nom de la variable d'environnement (…_env).
 
-# --- Annuaire : résout un utilisateur en SID et groupes (groupes imbriqués compris) ---
-# Les utilisateurs se connectent sur / avec leur compte Windows ; leurs groupes viennent d'ici.
-# Sans cette section, pas de connexion utilisateur (seuls la console et son bac à sable marchent).
+# --- Annuaire : résout un identifiant Windows en SID et groupes (groupes imbriqués compris) ---
+# Les comptes d'Alambic Search (console, page Utilisateurs) rattachés à un identifiant Windows
+# reçoivent d'ici leurs droits sur les documents. Sans cette section : groupes saisis seulement
+# (pas d'accès aux partages Windows ni à SharePoint, dont les droits sont des SID).
 #
 # identity:
 #   type: ldap
@@ -13,38 +14,13 @@
 #   bind_password_env: LDAP_PASSWORD
 #   cache_ttl: 300                # secondes
 #
-# Pour une démonstration sans annuaire (page de connexion : même mot de passe pour tous,
-# lu dans la variable DEMO_PASSWORD de .env) :
+# Pour une démonstration sans annuaire (identifiants Windows fictifs et leurs groupes) :
 # identity:
 #   type: static
-#   password_env: DEMO_PASSWORD
 #   users:
 #     alice: [compta]
 #     bob: [rh]
 #     olivier: [direction, compta, rh, tous]
-
-# --- Connexion unique (Keycloak, ou autre fournisseur OIDC) ---
-# Remplace la connexion par mot de passe : une seule connexion pour Alambic Search, Alambic Light
-# et le portail. Keycloak se branche sur l'AD du client (fédération LDAP) ou sur Entra ID.
-# oidc:
-#   issuer: ${OIDC_ISSUER}                 # ex. https://auth.client.fr/realms/alambic
-#   client_id: alambic-search
-#   client_secret_env: OIDC_CLIENT_SECRET
-#   url_publique: ${PUBLIC_URL}            # adresse d'Alambic Search vue par les navigateurs
-#   url_interne: ${OIDC_INTERNAL_URL}      # Keycloak vu par le serveur (Docker : http://keycloak:8180/realms/alambic)
-#   groupes: annuaire                      # annuaire : relus dans l'AD (SID compris) ;
-#                                          # jeton : ceux du jeton Keycloak (pas d'accès à l'AD)
-#
-# --- Portail : applications proposées après connexion, selon les rôles Keycloak ---
-# (« Rechercher dans les documents » est toujours proposé.)
-# portail:
-#   - nom: Alambic Light — validation
-#     url: http://localhost:8001/validation
-#     description: Contrôler et corriger les données extraites des documents
-#     role: alambic-light:validation       # client:rôle Keycloak ; absent : tout le monde
-#   - nom: Alambic Light — types de documents
-#     url: http://localhost:8001/ui/types
-#     role: alambic-light:admin
 
 # --- Alambic Light : OCR des scans, type du document et données extraites ---
 # Sans cette section, seul le texte des fichiers est indexé (les scans restent « OCR requis »).
@@ -66,7 +42,6 @@
 #   # adresse vue par le NAVIGATEUR ({uuid} = résultat). Par défaut : <url>/validation?document={uuid}.
 #   # "" : pas de bouton.
 #   # lien_validation: https://light.corp.local/validation?document={uuid}
-#   # roles_validation: [alambic-light:validation, alambic-light:admin]   # rôles Keycloak qui voient le bouton
 
 # --- Sources ---
 # Importées en base au PREMIER démarrage, puis gérées dans la console (/admin/sources) :

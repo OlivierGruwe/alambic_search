@@ -3,70 +3,15 @@
     "name": "Alambic Search",
     "_postman_id": "6d6c7d1e-3b1a-4c55-9a1e-a1amb1c5ea4c",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "API d'Alambic Search (GED interrogeable).\n\nAuthentification par défaut : jeton Keycloak (OAuth 2.0, code + PKCE) — onglet Authorization de la collection → « Get New Access Token ». Le client Keycloak doit accepter l'adresse de retour https://oauth.pstmn.io/v1/callback.\n\nToutes les réponses ne contiennent que les documents que l'utilisateur a le droit de lire."
+    "description": "API d'Alambic Search (GED interrogeable).\n\nAuthentification par défaut : clé d'API (en-tête Authorization: Bearer {{apiKey}}). Créer la clé dans Alambic Search → menu du compte → « Mon compte » → Clés d'API, puis la coller dans la variable apiKey de la collection. Autre possibilité : HTTP Basic avec un compte Alambic Search (onglet Authorization).\n\nToutes les réponses ne contiennent que les documents que le compte a le droit de lire."
   },
   "auth": {
-    "type": "oauth2",
-    "oauth2": [
+    "type": "bearer",
+    "bearer": [
       {
-        "key": "grant_type",
-        "value": "authorization_code_with_pkce",
+        "key": "token",
+        "value": "{{apiKey}}",
         "type": "string"
-      },
-      {
-        "key": "authUrl",
-        "value": "{{keycloakUrl}}/realms/{{realm}}/protocol/openid-connect/auth",
-        "type": "string"
-      },
-      {
-        "key": "accessTokenUrl",
-        "value": "{{keycloakUrl}}/realms/{{realm}}/protocol/openid-connect/token",
-        "type": "string"
-      },
-      {
-        "key": "clientId",
-        "value": "{{clientId}}",
-        "type": "string"
-      },
-      {
-        "key": "clientSecret",
-        "value": "{{clientSecret}}",
-        "type": "string"
-      },
-      {
-        "key": "scope",
-        "value": "openid",
-        "type": "string"
-      },
-      {
-        "key": "redirect_uri",
-        "value": "https://oauth.pstmn.io/v1/callback",
-        "type": "string"
-      },
-      {
-        "key": "challengeAlgorithm",
-        "value": "S256",
-        "type": "string"
-      },
-      {
-        "key": "client_authentication",
-        "value": "body",
-        "type": "string"
-      },
-      {
-        "key": "addTokenTo",
-        "value": "header",
-        "type": "string"
-      },
-      {
-        "key": "tokenName",
-        "value": "Alambic Search",
-        "type": "string"
-      },
-      {
-        "key": "useBrowser",
-        "value": false,
-        "type": "boolean"
       }
     ]
   },
@@ -76,20 +21,22 @@
       "value": "http://localhost:8002"
     },
     {
-      "key": "keycloakUrl",
-      "value": "http://localhost:8180"
+      "key": "apiKey",
+      "value": "als_xxxxxxxx_coller-ici-la-cle",
+      "type": "string",
+      "description": "Clé d'API (Mon compte → Clés d'API)"
     },
     {
-      "key": "realm",
-      "value": "alambic"
+      "key": "login",
+      "value": "",
+      "type": "string",
+      "description": "Compte (HTTP Basic, si pas de clé)"
     },
     {
-      "key": "clientId",
-      "value": "alambic-search"
-    },
-    {
-      "key": "clientSecret",
-      "value": "dev-alambic-search-a-changer"
+      "key": "password",
+      "value": "",
+      "type": "string",
+      "description": "Mot de passe (HTTP Basic)"
     },
     {
       "key": "groups",
@@ -97,10 +44,6 @@
     },
     {
       "key": "user",
-      "value": ""
-    },
-    {
-      "key": "adminPassword",
       "value": ""
     },
     {
@@ -126,7 +69,7 @@
   ],
   "item": [
     {
-      "name": "1. Recherche (jeton Keycloak)",
+      "name": "1. Recherche (clé d'API)",
       "item": [
         {
           "name": "Question — réponse rédigée",
@@ -751,7 +694,7 @@
           "request": {
             "method": "POST",
             "header": [],
-            "description": "Synchro bloquante (scripts, cron) : parcours + delta, renvoie le rapport. Administrateur : HTTP Basic admin / ADMIN_PASSWORD, ou jeton avec le rôle alambic-search:admin. 409 si une synchro tourne déjà ou si le garde-fou de suppression se déclenche.",
+            "description": "Synchronisation bloquante. Compte de rôle gestionnaire ou administrateur (clé d'API de ce compte). 409 si une synchro tourne déjà.",
             "url": {
               "raw": "{{baseUrl}}/sources/{{syncSource}}/sync",
               "host": [
@@ -761,21 +704,6 @@
                 "sources",
                 "{{syncSource}}",
                 "sync"
-              ]
-            },
-            "auth": {
-              "type": "basic",
-              "basic": [
-                {
-                  "key": "username",
-                  "value": "admin",
-                  "type": "string"
-                },
-                {
-                  "key": "password",
-                  "value": "{{adminPassword}}",
-                  "type": "string"
-                }
               ]
             }
           }

@@ -140,3 +140,78 @@ def test_auto_sync_only_on_scheduler_instance(connector, store, embedder):
     with TestClient(worker):
         worker.state.catalog.manager.wait(connector.name, 10)
         assert store.list_runs(connector.name)
+
+
+def test_api_waits_for_database(monkeypatch, tmp_path):
+    """Swarm : la base démarre après l'API ; l'API patiente au lieu de planter en boucle."""
+    import psycopg
+    import pytest
+
+    from ged import api
+
+    calls = {"init": 0}
+
+    class SlowStore:
+        def __init__(self, *a, **k):
+            pass
+
+        def init(self):
+            calls["init"] += 1
+            if calls["init"] < 3:
+                raise psycopg.OperationalError("failed to resolve host 'db'")
+            raise RuntimeError("base prête")  # arrête le test ici : la suite n'est pas testée
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("ged.store.PgStore", SlowStore)
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    monkeypatch.setenv("SOURCES_FILE", str(tmp_path / "absent.yaml"))
+    with pytest.raises(RuntimeError, match="base prête"):
+        api.app_from_env()
+    assert calls["init"] == 3
+
+    calls["init"] = -100  # toujours injoignable
+    monkeypatch.setenv("DB_WAIT", "0")
+    with pytest.raises(SystemExit, match="Swarm"):
+        api.app_from_env()
+
+
+def test_shutdown_interrupts_sync_without_errors(connector, store, embedder):
+    """Arrêt pendant une synchro : passage « interrompu », aucun document en erreur, rien supprimé."""
+    import threading
+
+    from ged.admin import SyncManager
+    from ged.models import RunStatus, Status
+    from ged.sync import SyncInterrupted, sync_source
+
+    sync_source(connector, store, embedder)
+    before = {r.doc_id for r in store.list_documents(limit=100)[0]}
+
+    class ClosingEmbedder:
+        """Le client se ferme pendant la synchro (arrêt du service)."""
+        dim = embedder.dim
+
+        def __init__(self, cancel):
+            self.cancel = cancel
+
+        def embed(self, texts):
+            self.cancel.set()
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
+
+    for f in connector.root.rglob("*.txt"):
+        f.write_text(f.read_text(encoding="utf-8") + " modifié", encoding="utf-8")
+    cancel = threading.Event()
+    import pytest
+
+    with pytest.raises(SyncInterrupted):
+        sync_source(connector, store, ClosingEmbedder(cancel), cancel=cancel)
+    rows = store.list_documents(limit=100)[0]
+    assert {r.doc_id for r in rows} == before and not any(r.status == Status.ERROR for r in rows)
+
+    m = SyncManager(store, embedder, {connector.name: connector})
+    m._cancel.set()  # arrêt déjà demandé : le passage s'arrête tout de suite
+    m.start(connector.name)
+    m.wait(connector.name, 10)
+    assert store.list_runs(connector.name)[0].status == RunStatus.INTERRUPTED
+    m.shutdown(1)

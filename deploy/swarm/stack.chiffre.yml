@@ -1,0 +1,7 @@
+# Ajouté par make stack-deploy (sauf STACK_CHIFFRE=0) : trafic du réseau backend chiffré entre les nœuds (IPsec).
+# Docker Desktop n'a pas le module noyau nécessaire (« Extension policy … missing kernel module ») :
+# STACK_CHIFFRE=0 sur un poste de dev. Inutile sur un seul nœud (le trafic ne quitte pas la machine).
+networks:
+  backend:
+    driver: overlay                   # la fusion remplace la définition entière : la répéter
+    driver_opts: {encrypted: "true"}

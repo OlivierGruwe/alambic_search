@@ -1,8 +1,9 @@
 """Session de l'utilisateur connecté : cookie signé (HMAC-SHA256), sans stockage côté serveur.
 
-Le cookie ne contient que l'identifiant, le nom affiché et l'échéance : jamais de mot de passe,
-jamais de groupes. Les groupes sont relus dans l'annuaire à chaque requête (cache de quelques
-minutes) : un utilisateur retiré d'un groupe perd l'accès sans attendre la fin de sa session.
+Le cookie ne contient que l'identifiant, le nom affiché, une empreinte courte du mot de passe et
+l'échéance : jamais le mot de passe, jamais les groupes ni le rôle. Compte, rôle et groupes sont
+relus à chaque requête : un compte désactivé, un rôle retiré ou un mot de passe changé prennent
+effet aussitôt.
 
 Cookie HttpOnly (illisible par JavaScript), SameSite=Lax (pas envoyé par un formulaire posté
 depuis un autre site), Secure si COOKIE_SECURE=true (à activer derrière HTTPS).
@@ -21,7 +22,6 @@ import time
 log = logging.getLogger(__name__)
 
 COOKIE = "alambic_session"
-MAX_COOKIE = 3800  # les navigateurs refusent les cookies de plus de 4 Ko
 
 
 class Sessions:
@@ -37,7 +37,7 @@ class Sessions:
     def _sign(self, payload: bytes) -> str:
         return base64.urlsafe_b64encode(hmac.new(self._key, payload, hashlib.sha256).digest()).decode().rstrip("=")
 
-    # --- Jetons signés génériques (session, connexion OIDC en cours) ---------------------
+    # --- Jetons signés génériques -----------------------------------------------------------
 
     def pack(self, data: dict, max_age: int) -> str:
         payload = json.dumps({**data, "exp": int(time.time()) + max_age}, separators=(",", ":"),
@@ -66,24 +66,13 @@ class Sessions:
 
     # --- Session de l'utilisateur ------------------------------------------------------
 
-    def issue(self, login: str, name: str, *, groups: list[str] | None = None, roles: list[str] | None = None) -> str:
-        """`groups` : seulement si les groupes viennent du jeton OIDC (pas d'annuaire joignable) ;
-        `roles` : rôles Keycloak (tuiles du portail)."""
-        data: dict = {"u": login, "n": name}
-        if groups is not None:
-            data["g"] = list(groups)
-        if roles:
-            data["r"] = list(roles)
-        token = self.pack(data, self.max_age)
-        while len(token) > MAX_COOKIE and data.get("g"):
-            # Trop de groupes pour un cookie : on en retire (moins d'accès, jamais plus)
-            dropped = data["g"].pop()
-            log.warning("Session de %s : groupe %s ignoré (cookie trop grand)", login, dropped)
-            token = self.pack(data, self.max_age)
-        return token
+    def issue(self, login: str, name: str, *, pw: str = "") -> str:
+        """`pw` : empreinte courte du mot de passe (accounts.password_tag) ; un changement de mot de
+        passe rend la session caduque."""
+        return self.pack({"u": login, "n": name, "pw": pw}, self.max_age)
 
     def read(self, token: str | None) -> dict | None:
-        """{"u": login, "n": nom, "g": groupes?, "r": rôles?} si le cookie est intact et non expiré."""
+        """{"u": login, "n": nom, "pw": empreinte} si le cookie est intact et non expiré."""
         data = self.unpack(token)
         return data if data and data.get("u") else None
 

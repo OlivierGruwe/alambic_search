@@ -58,3 +58,38 @@
 </nav>
 {% endif %}
 {%- endmacro %}
+
+{# Clés d'API d'un compte : nouvelle clé (affichée une fois), liste, création, révocation.
+   `base` : URL des actions (ex. /compte ou /admin/utilisateurs/3) #}
+{% macro api_keys(keys, now, base, new_key=None) -%}
+{% if new_key %}
+<div class="key-box" role="status">
+  <p><b>Copiez cette clé maintenant :</b> elle ne sera plus jamais affichée (seule son empreinte est gardée).</p>
+  <div class="key-row"><code id="new-key">{{ new_key }}</code>
+    <button class="btn secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('new-key').textContent);this.textContent='Copiée'">Copier</button></div>
+  <p class="hint">À passer dans l'en-tête <code>Authorization: Bearer {{ new_key[:13] }}…</code> ou <code>X-API-Key</code>. Elle agit avec le rôle et les droits du compte.</p>
+</div>
+{% endif %}
+{% if keys %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Nom</th><th>Clé</th><th>Créée</th><th>Expire</th><th>Dernier usage</th><th>État</th><th></th></tr></thead>
+  <tbody>
+  {% for k in keys %}
+    <tr><td>{{ k.name }}</td><td><code>als_{{ k.prefix }}_…</code></td><td class="nowrap">{{ k.created_at|when }}</td>
+      <td class="nowrap">{{ k.expires_at|when if k.expires_at else "jamais" }}</td><td class="nowrap">{{ k.last_used|when if k.last_used else "—" }}</td>
+      <td>{% if k.revoked_at %}<span class="status muted">Révoquée</span>{% elif k.expires_at and k.expires_at <= now %}<span class="status warn">Expirée</span>{% else %}<span class="status ok">Active</span>{% endif %}</td>
+      <td>{% if not k.revoked_at %}<form method="post" action="{{ base }}/cles/{{ k.id }}/revoquer" style="margin: 0"
+            onsubmit="return confirm('Révoquer cette clé ? Les applications qui l\'utilisent n\'auront plus accès.')">
+        <button class="btn secondary danger" type="submit">Révoquer</button></form>{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="empty">Aucune clé d'API.</p>{% endif %}
+<form class="inline-form" method="post" action="{{ base }}/cles">
+  <div class="field">{{ label("k-name", "Nom de la clé", "Pour la reconnaître plus tard : l'application ou le script qui l'utilise.") }}
+    <input id="k-name" name="nom" required maxlength="100" placeholder="ex. Intranet, script d'export"></div>
+  <div class="field"><label for="k-days">Validité</label>
+    <select id="k-days" name="jours"><option value="30">30 jours</option><option value="90" selected>90 jours</option><option value="365">1 an</option><option value="0">Sans échéance</option></select></div>
+  <button class="btn" type="submit">Créer une clé</button>
+</form>
+{%- endmacro %}

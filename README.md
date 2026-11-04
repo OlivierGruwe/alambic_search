@@ -181,36 +181,38 @@ Le texte OCR est lu dans la réponse du typage ou, à défaut, sur `GET /v1/docu
 Si Alambic Light n'expose aucun des deux, un scan n'est interrogeable que par sa fiche (signalé
 dans la console).
 
-## Connexion des utilisateurs
+## Comptes, rôles et connexion
 
-Page `/` : connexion avec le compte Windows (identifiant `alice`, `CORP\alice` ou
-`alice@corp.local`), puis question ou liste. Le mot de passe est vérifié par l'AD (connexion LDAP
-au nom de l'utilisateur), jamais stocké. Les groupes viennent de l'annuaire pour le compte
-connecté, relus toutes les 5 minutes : personne ne choisit ses droits.
+Alambic Search gère ses propres comptes (console → **Utilisateurs**, administrateurs seulement).
+Premier démarrage, base sans compte : le compte `admin` est créé avec `ADMIN_PASSWORD`. Accès
+perdu : `make compte LOGIN=admin ROLE=admin` (ou `alambic-search compte admin --role admin`)
+redéfinit le mot de passe et réactive le compte.
 
-- Session : cookie signé (`SESSION_SECRET`), HttpOnly, SameSite=Lax, 8 h ; `COOKIE_SECURE=true`
-  derrière HTTPS.
-- 5 échecs en 15 min pour un identifiant ou une adresse : connexion bloquée 15 min (en dessous
-  du seuil de verrouillage de l'AD, pour ne pas verrouiller les comptes Windows).
-- API (`/ask`, `/search`, `/recherche`, `/documents`) : même session. Les en-têtes `X-User` /
-  `X-User-Groups` ne sont acceptés qu'avec `TRUST_IDENTITY_HEADERS=true`, derrière un proxy
-  de confiance.
-- Démonstration sans AD : `identity: type: static` avec `password_env: DEMO_PASSWORD`.
-- Plus tard : connexion Windows automatique (Kerberos) et Entra ID / Keycloak (OIDC).
+| Rôle | Accès |
+| --- | --- |
+| Utilisateur | Recherche (`/rechercher`), API, « Mon compte » (mot de passe, clés d'API) |
+| Gestionnaire | + console : sources, documents, synchros, droits, bac à sable ; `POST /sources/…/sync` |
+| Administrateur | + comptes et clés d'API de tous |
 
-## Connexion unique (Keycloak) et portail
+Droits sur les documents d'un compte (cumulés) :
 
-Avec une section `oidc` dans `sources.yaml`, la connexion passe par Keycloak (ou un autre
-fournisseur OIDC) : une seule connexion pour Alambic Search, Alambic Light et le portail ;
-« Se déconnecter » ferme la session partout. Voir **docs/connexion-unique.md**.
+- **Compte Windows rattaché** : SID et groupes lus dans l'annuaire (section `identity`), comme
+  sous Windows — indispensable pour les partages SMB et SharePoint (droits en SID) ;
+- **Groupes saisis** par l'administrateur : noms des règles par dossier (dossier, FTP, S3) et des GED ;
+- toujours : Tout le monde, Utilisateurs authentifiés, `u:<identifiant>`.
 
-- `make sso` : Keycloak de démonstration (royaume prêt, comptes olivier / alice / bob, mot de passe `demo`).
-- Groupes : relus dans l'AD (`groupes: annuaire`, défaut, SID compris) ou pris dans le jeton
-  (`groupes: jeton`, installation sans accès à l'AD).
-- Portail (`/`) : tuiles des applications selon les rôles Keycloak (section `portail`).
-- Rôle `alambic-search:admin` : console `/admin` sans mot de passe.
-- API : jetons Keycloak acceptés (`Authorization: Bearer …`) s'ils sont destinés à `alambic-search`.
-- Sources FTP / FTPS et S3 (Amazon ou compatible) : voir la section des sources.
+Sécurité :
+
+- mots de passe : empreinte scrypt, 10 caractères au moins ; changer un mot de passe ferme les
+  autres sessions du compte ;
+- session : cookie signé (`SESSION_SECRET`), HttpOnly, SameSite=Lax, 8 h ; `COOKIE_SECURE=true`
+  derrière HTTPS ; compte, rôle et groupes relus à chaque requête (désactiver un compte coupe
+  aussitôt sessions et clés) ;
+- 5 échecs en 15 min pour un identifiant ou une adresse : connexion bloquée 15 min (page et HTTP Basic) ;
+- clés d'API : `als_<préfixe>_<secret>`, montrées une seule fois, seule l'empreinte SHA-256 est
+  gardée ; échéance (30 j, 90 j, 1 an ou aucune), révocables ; un compte sans mot de passe
+  n'utilise que des clés (compte d'application) ;
+- il reste toujours un administrateur actif ; on ne peut ni se retirer le rôle ni supprimer son propre compte.
 
 ## Recherche par critères : « toutes les factures de M. GRUWE »
 
@@ -294,7 +296,7 @@ par base pour l'instant.
 
 `deploy/swarm/` contient la stack de production (`stack.yml`) : `caddy` (HTTPS), `api` (2 instances
 et plus, sans état), `worker` (synchronisations planifiées), `db` + `backup`, `ollama`, `rerank`,
-`gotenberg`, `keycloak`. Secrets Docker (`secrets.sh`, variables `*_FILE` lues sous `/run/secrets`),
+`gotenberg`. Secrets Docker (`secrets.sh`, variables `*_FILE` lues sous `/run/secrets`),
 placement par étiquettes de nœuds (`alambic.db`, `alambic.gpu`, `alambic.edge`).
 
 ```bash
@@ -326,17 +328,20 @@ Schéma complet : `/openapi.json` (importable aussi dans Postman), documentation
 | `GET` | `/recherche?valeur=GRUWE&type=FACTURE&champ=…&mentions=true` | Liste exhaustive par critères (données extraites) |
 | `GET` | `/documents/{source}/{doc_id}` | Ouvre le fichier après **revérification en direct** des droits (`?pdf=true` : bureautique en PDF) |
 | `GET` | `/vignettes/{source}/{doc_id}?page=N&l=320` | Aperçu WebP de la page |
-| `POST` | `/sources/{nom}/sync` | Synchro bloquante (scripts). **Administrateur** : HTTP Basic `admin` / `ADMIN_PASSWORD`, ou jeton avec le rôle `alambic-search:admin`. 409 si une synchro tourne ou si le garde-fou de suppression se déclenche |
+| `POST` | `/sources/{nom}/sync` | Synchro bloquante (scripts). Rôle **gestionnaire** ou **administrateur**. 409 si une synchro tourne ou si le garde-fou de suppression se déclenche |
 | `GET` | `/health` | État et sources chargées (sans authentification) |
 
-Identité de l'appelant (toutes les routes sauf `/health` et `/sources/…/sync`) :
+Authentification (toutes les routes sauf `/health`), avec les droits du compte :
 
-- **Jeton Keycloak** : `Authorization: Bearer <access_token>` émis pour le client `alambic-search`
-  (dans Postman : OAuth 2.0, code + PKCE, retour `https://oauth.pstmn.io/v1/callback` à autoriser
-  dans le client Keycloak). Groupes : annuaire, ou jeton (`groupes: jeton`).
-- **Session** du navigateur (après `/connexion`).
+- **Clé d'API** (recommandé pour une application) : `Authorization: Bearer als_…` ou
+  `X-API-Key: als_…`, créée dans « Mon compte » ou par un administrateur ;
+- **Identifiant et mot de passe** : HTTP Basic (freiné après 5 échecs) ;
+- **Session** du navigateur (après `/connexion`) ;
 - **En-têtes** `X-User` (résolu dans l'annuaire) / `X-User-Groups` : seulement avec
   `TRUST_IDENTITY_HEADERS=true` (développement, ou derrière un proxy qui fixe ces en-têtes).
+
+Identifiants explicites (clé, Basic) l'emportent sur le cookie de session. Clé invalide, expirée
+ou révoquée : 401 ; rôle insuffisant : 403.
 
 En ligne de commande (pour une synchro planifiée) :
 

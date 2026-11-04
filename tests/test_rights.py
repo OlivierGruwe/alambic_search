@@ -57,7 +57,7 @@ def test_rights_page(embedder):
     assert "Ce qu'il voit" in html and "Aucun SID" not in html
     assert store.visible_counts(identity.principals("alice")) == {"partage": 1, "ged": 1}
 
-    html = c.get("/admin/droits", params={"groups": "compta"}, auth=auth).text  # comme un jeton Keycloak
+    html = c.get("/admin/droits", params={"groups": "compta"}, auth=auth).text  # groupes saisis seulement
     assert "Aucun SID Windows" in html and "Tout le monde" in html
     html = c.get("/admin/droits", params={"login": "inconnu"}, auth=auth).text
     assert "inconnu de l" in html

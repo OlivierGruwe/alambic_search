@@ -25,16 +25,16 @@
       </table></div>
     </div>
     <div>
-      <h3>Côté utilisateur : l'annuaire ou le jeton</h3>
+      <h3>Côté utilisateur : son compte Alambic Search</h3>
       <div class="table-wrap"><table>
-        <thead><tr><th>Origine</th><th>Ce que reçoit l'utilisateur</th></tr></thead>
+        <thead><tr><th>Réglage du compte</th><th>Ce que reçoit l'utilisateur</th></tr></thead>
         <tbody>
-          <tr {% if has_identity %}class="current"{% endif %}><td class="nowrap">Annuaire AD (LDAP){% if has_identity %} <span class="status ok">actif</span>{% endif %}</td><td>Son <b>SID</b>, les SID de tous ses groupes (imbriqués compris), leurs <b>noms</b>, <code>u:identifiant</code>, Tout le monde</td></tr>
-          <tr {% if oidc_groups_mode == 'jeton' %}class="current"{% endif %}><td class="nowrap">Jeton Keycloak{% if oidc_groups_mode == 'jeton' %} <span class="status warn">actif</span>{% endif %}</td><td>Les <b>noms</b> de groupes du jeton, <code>u:identifiant</code>, Tout le monde — <b>pas de SID</b> : partages Windows et SharePoint invisibles</td></tr>
-          <tr {% if oidc_groups_mode == 'annuaire' %}class="current"{% endif %}><td class="nowrap">Keycloak + annuaire{% if oidc_groups_mode == 'annuaire' %} <span class="status ok">actif</span>{% endif %}</td><td>Connexion par Keycloak, groupes lus dans l'AD : comme la première ligne</td></tr>
+          <tr><td class="nowrap">Identifiant AD rattaché{% if has_identity %} <span class="status ok">annuaire configuré</span>{% else %} <span class="status warn">pas d'annuaire</span>{% endif %}</td><td>Son <b>SID</b>, les SID de tous ses groupes (imbriqués compris), leurs <b>noms</b>, <code>u:identifiant</code> : les mêmes droits que sous Windows</td></tr>
+          <tr><td class="nowrap">Groupes saisis</td><td>Les <b>noms</b> saisis par l'administrateur — <b>pas de SID</b> : utiles pour les règles par dossier et les GED, pas pour les partages Windows ni SharePoint</td></tr>
+          <tr><td class="nowrap">Toujours</td><td>Tout le monde, Utilisateurs authentifiés, <code>u:</code> + identifiant du compte</td></tr>
         </tbody>
       </table></div>
-      {% if not has_identity and not oidc_groups_mode %}<p class="hint">Ni annuaire ni Keycloak configuré : les groupes ne viennent que des en-têtes de l'API ou du bac à sable.</p>{% endif %}
+      <p class="hint">Les deux se cumulent. À régler dans <a href="/admin/utilisateurs">Utilisateurs</a>{% if not is_admin %} (administrateurs){% endif %}.</p>
     </div>
   </div>
 </section>
@@ -42,11 +42,9 @@
 <section class="section" aria-labelledby="test-title">
   <h2 id="test-title">Tester un utilisateur</h2>
   <form class="sandbox-form" method="get" action="/admin/droits">
-    {% if has_identity %}
-    <div class="field">{{ label("r-u", "Utilisateur", "Identifiant Windows. Ses principaux sont lus dans l'annuaire, exactement comme à sa connexion.") }}
+    <div class="field">{{ label("r-u", "Compte", "Identifiant d'un compte Alambic Search : ses droits, exactement comme à sa connexion." ~ (" À défaut, un identifiant de l'annuaire." if has_identity else "")) }}
       <input id="r-u" type="text" name="login" value="{{ login }}" placeholder="ex. alice" autocomplete="off"></div>
-    {% endif %}
-    <div class="field">{{ label("r-g", "Groupes" ~ (" supplémentaires" if has_identity else ""), "Noms de groupes séparés par des virgules : pour simuler un jeton Keycloak, ou tester une règle avant de modifier l'annuaire.") }}
+    <div class="field">{{ label("r-g", "Groupes supplémentaires", "Noms de groupes séparés par des virgules : pour tester une règle avant de modifier le compte ou l'annuaire.") }}
       <input id="r-g" type="text" name="groups" value="{{ groups }}" placeholder="ex. compta, direction" autocomplete="off"></div>
     <div class="wide"><button class="btn" type="submit">Voir ses droits</button></div>
   </form>
@@ -54,7 +52,8 @@
   {% if test %}
   {% if test.error %}<div class="error-box" role="alert">{{ test.error }}</div>
   {% else %}
-  {% if test.unknown %}<div class="error-box" role="alert">« {{ test.login }} » est inconnu de l'annuaire.</div>{% endif %}
+  {% if test.unknown %}<div class="error-box" role="alert">« {{ test.login }} » : ni compte Alambic Search{% if has_identity %}, ni identifiant de l'annuaire{% endif %}.</div>{% endif %}
+  {% if test.account %}<p class="hint">Compte <a href="/admin/utilisateurs/{{ test.account.id }}">{{ test.account.login }}</a>{% if test.account.ad_login %}, rattaché à l'identifiant AD « {{ test.account.ad_login }} »{% endif %}{% if test.account.groups %}, groupes saisis : {{ test.account.groups|join(", ") }}{% endif %}.</p>{% endif %}
   {% for w in test.warnings %}<p class="notice notice-warn">{{ w }}</p>{% endfor %}
   <div class="rights-sides" style="margin-top: 14px">
     <div>

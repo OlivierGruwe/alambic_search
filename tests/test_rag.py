@@ -123,11 +123,13 @@ def test_api_accepts_history(connector, store, embedder):
 
 
 def test_search_page_carries_history(connector, store, embedder):
-    from ged.session import COOKIE, Sessions
+    from ged.accounts import Accounts
+    from ged.models import Role
 
     sync_source(connector, store, embedder)
     c = TestClient(create_app(store, embedder, FakeLLM("Réponse [1]."), {connector.name: connector}, session_secret="k"))
-    c.cookies.set(COOKIE, Sessions("k").issue("alice", "Alice", groups=["compta"]))
+    Accounts(store).create("alice", "Alice", Role.USER, "alice-mdp-123", groups=["compta"])
+    c.post("/connexion", data={"identifiant": "alice", "mot_de_passe": "alice-mdp-123"})
     html = c.post("/rechercher", data={"mode": "question", "question": "pénalité de retard", "formuler": "true"}).text
     assert 'name="historique" form="search-form"' in html and "Nouvelle conversation" in html
     value = html.split('name="historique" form="search-form" value="', 1)[1].split('"', 1)[0]

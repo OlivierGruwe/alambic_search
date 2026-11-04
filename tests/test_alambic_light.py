@@ -567,8 +567,6 @@ def _console(store, embedder, analyzer, connector):
 
 
 def test_console_links_to_light_validation_and_rereads(scans, store, embedder):
-    from ged.session import COOKIE, Sessions
-
     fake = FakeLight()
     analyzer = client(fake, send_all=False, validation_link="https://light.corp/validation?document={uuid}")
     connector = FileSystemConnector("partage", scans, ACL)
@@ -581,13 +579,6 @@ def test_console_links_to_light_validation_and_rereads(scans, store, embedder):
     html = http.get(url, auth=("admin", "pw")).text
     assert f'href="https://light.corp/validation?document={doc.meta.light_uuid}"' in html
     assert "Relire le résultat" in html and "vous demandera de vous connecter" in html
-
-    # Connecté sans le rôle de validation : pas de lien, explication
-    http.cookies.set(COOKIE, Sessions("cle-de-test").issue("bob", "Bob", roles=["alambic-search:admin"]))
-    html = http.get(url, auth=("admin", "pw")).text
-    assert "light.corp/validation" not in html and "alambic-light:validation" in html
-    http.cookies.set(COOKIE, Sessions("cle-de-test").issue("val", "Val", roles=["alambic-light:validation"]))
-    assert "light.corp/validation" in http.get(url, auth=("admin", "pw")).text
 
     # Pas encore validé : rien de nouveau
     form = {"source": "partage", "doc_id": doc.doc_id}

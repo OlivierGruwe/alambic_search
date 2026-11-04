@@ -12,26 +12,7 @@
 <body class="al-app">
 {% include "_bandeau.html" %}
 <div class="al-shell">
-  <nav class="al-nav" aria-label="Menu d'Alambic Search">
-    <p class="al-nav-group">Index</p>
-    <a href="/admin" {% if nav == 'dashboard' %}aria-current="page"{% endif %}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
-      Tableau de bord</a>
-    <a href="/admin/sources" {% if nav == 'sources' %}aria-current="page"{% endif %}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/></svg>
-      Sources</a>
-    <a href="/admin/documents" {% if nav == 'documents' %}aria-current="page"{% endif %}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>
-      Documents</a>
-    <a href="/admin/droits" {% if nav == 'droits' %}aria-current="page"{% endif %}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
-      Droits</a>
-    <p class="al-nav-group">Essais</p>
-    <a href="/admin/sandbox" {% if nav == 'sandbox' %}aria-current="page"{% endif %}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg>
-      Bac à sable</a>
-    <p class="al-nav-foot"><span class="al-signature"><img src="/admin/static/alambic-ui/img/arondor.png" alt="Arondor" width="80" height="22"></span>Console d'administration</p>
-  </nav>
+  {% include "_nav.html" %}
   <main class="al-main" id="main">
     {% block content %}{% endblock %}
   </main>

@@ -4,20 +4,18 @@ Rendu serveur (Jinja2) + HTMX pour les mises à jour partielles. Aucune ressourc
 externe : polices, htmx et logo sont servis localement (déploiement souverain,
 réseau fermé).
 
-Accès protégé par HTTP Basic (utilisateur « admin », mot de passe ADMIN_PASSWORD).
-Sans mot de passe configuré, la console est désactivée.
+Accès : comptes de rôle gestionnaire ou administrateur (session, ou identifiant et mot de passe
+en HTTP Basic, ou clé d'API). La page Utilisateurs est réservée aux administrateurs.
 """
 from __future__ import annotations
 
 import datetime as dt
 import math
-import secrets
 import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -115,11 +113,23 @@ templates.env.globals.update(DOC_STATUS=DOC_STATUS, DOC_LEGEND=DOC_LEGEND, RUN_S
 
 
 def build_router(
-    store, embedder, llm, connectors: dict, manager: SyncManager, admin_password: str | None, identity=None,
-    analyzer=None, converter=None, catalog=None, admin_session=None, session_roles=None, thumbnail=None,
-    reranker=None,
+    store, embedder, llm, connectors: dict, manager: SyncManager, auth, identity=None,
+    analyzer=None, converter=None, catalog=None, thumbnail=None, reranker=None,
 ) -> APIRouter:
-    from ged.api import resolve_principals
+    from ged.models import Role
+
+    accounts = auth.accounts
+
+    def resolve_principals(identity, login: str, groups: str) -> frozenset[str]:
+        """Principaux à tester (bac à sable, Droits) : d'un compte d'Alambic Search, sinon d'un
+        identifiant de l'annuaire ; plus les groupes saisis."""
+        from ged.api import resolve_principals as from_directory
+
+        extra = frozenset(g.strip() for g in groups.split(",") if g.strip())
+        account = store.get_user(login.strip()) if login.strip() else None
+        if account is not None:
+            return accounts.principals(account) | extra
+        return from_directory(identity, login, groups)
 
     # Noms lisibles des SID dans toute la console (annuaire), sinon le principal tel quel
     resolve = identity.display_name if identity is not None else (lambda p: p)
@@ -143,37 +153,31 @@ def build_router(
 
     def light_validation(request: Request, meta) -> dict | None:
         """Bouton « Valider dans Alambic Light » d'un document dont des données sont à vérifier.
-        allowed : True (rôle de validation), False (connecté sans ce rôle), None (console par mot
-        de passe : Alambic Light demandera ses propres identifiants et vérifiera les droits)."""
+        Alambic Light demande ses propres identifiants et vérifie lui-même le droit de valider."""
         if analyzer is None or meta is None or not meta.light_uuid or meta.validated or not meta.to_check:
             return None
         if meta.light_status in ("EXPIRE", "EFFACE"):
             return None
-        roles = session_roles(request) if session_roles is not None else None
-        allowed = None if roles is None else bool(set(analyzer.validation_roles) & set(roles))
-        return {"url": analyzer.validation_url(meta.light_uuid), "allowed": allowed,
+        return {"url": analyzer.validation_url(meta.light_uuid), "allowed": None,
                 "roles": ", ".join(analyzer.validation_roles)}
 
     templates.env.globals["light_validation"] = light_validation
     templates.env.filters.update(field_name=_human, field_value=lambda v: _render(v) or "—")
 
-    security = HTTPBasic(auto_error=False)
+    def require_console(request: Request) -> None:
+        """Gestionnaire ou administrateur. Navigateur sans session : page de connexion, puis retour."""
+        user = auth.user(request)
+        if user is None and request.method == "GET" and "text/html" in request.headers.get("accept", "") \
+                and not request.headers.get("HX-Request"):
+            from urllib.parse import quote
 
-    def require_admin(request: Request, creds: HTTPBasicCredentials | None = Depends(security)) -> None:
-        # Connexion unique : un utilisateur connecté par Keycloak avec le rôle « admin » d'Alambic Search
-        if admin_session is not None and admin_session(request):
-            return
-        if not admin_password:
-            raise HTTPException(503, "Console désactivée : définissez ADMIN_PASSWORD, ou donnez le rôle admin "
-                                     "dans Keycloak.")
-        ok = creds is not None and secrets.compare_digest(creds.username.encode(), b"admin") and \
-            secrets.compare_digest(creds.password.encode(), admin_password.encode())
-        if not ok:
-            raise HTTPException(401, "Identifiants requis", headers={"WWW-Authenticate": 'Basic realm="Alambic Search"'})
+            target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+            raise HTTPException(303, "Connexion requise", headers={"Location": f"/connexion?suite={quote(target)}"})
+        auth.require(request, Role.MANAGER)
 
     def same_origin(request: Request) -> None:
-        """Anti-CSRF : la console s'authentifie en HTTP Basic, que le navigateur renvoie tout seul.
-        Un formulaire posté depuis un autre site ne doit donc rien pouvoir modifier."""
+        """Anti-CSRF : un formulaire posté depuis un autre site ne doit rien pouvoir modifier (le
+        navigateur renvoie seul le cookie de session et les identifiants HTTP Basic)."""
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return
         origin = request.headers.get("origin") or request.headers.get("referer")
@@ -183,10 +187,12 @@ def build_router(
             if urlsplit(origin).netloc != request.headers.get("host", ""):
                 raise HTTPException(403, "Requête refusée : elle ne vient pas de la console.")
 
-    router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin), Depends(same_origin)])
+    router = APIRouter(prefix="/admin", dependencies=[Depends(require_console), Depends(same_origin)])
 
     def page(request: Request, name: str, nav: str, **ctx) -> HTMLResponse:
-        return templates.TemplateResponse(request, name, {"nav": nav, **ctx})
+        me = auth.user(request)
+        return templates.TemplateResponse(request, name, {"nav": nav, "me": me,
+                                                          "is_admin": me is not None and me.role == Role.ADMIN, **ctx})
 
     # --- Tableau de bord -----------------------------------------------------------
 
@@ -540,7 +546,7 @@ def build_router(
                 from ged.identity import AUTHENTICATED_USERS
                 from ged.ntsecurity import EVERYONE
 
-                # tout utilisateur connecté les reçoit (annuaire comme jeton Keycloak)
+                # tout utilisateur connecté les reçoit
                 principals = resolve_principals(identity, login, groups) | {EVERYONE, AUTHENTICATED_USERS}
             except Exception as exc:  # annuaire injoignable
                 test = {"error": f"L'annuaire n'a pas répondu ({type(exc).__name__} : {exc})."}
@@ -553,8 +559,9 @@ def build_router(
                     "per_source": [{"name": s["name"], "visible": visible.get(s["name"], 0), "total": s["total"]}
                                    for s in sources],
                     "warnings": user_warnings(principals, index_kinds),
-                    "unknown": bool(login.strip()) and identity is not None
-                    and not identity.principals(login.strip()),
+                    "account": store.get_user(login.strip()) if login.strip() else None,
+                    "unknown": bool(login.strip()) and store.get_user(login.strip()) is None
+                    and (identity is None or not identity.principals(login.strip())),
                 }
         return page(request, "droits.html", "droits", sources=sources, test=test, login=login, groups=groups)
 
@@ -621,6 +628,126 @@ def build_router(
             {"answer": answer, "groups": sorted(grp, key=lambda p: templates.env.globals["pname"](p).lower()),
              "login": login.strip(), "ms": ms, "cited": cited},
         )
+
+    # --- Utilisateurs (administrateurs seulement) ------------------------------------------
+
+    def require_admin(request: Request):
+        return auth.require(request, Role.ADMIN)
+
+    def users_page(request: Request, **ctx) -> HTMLResponse:
+        users = store.list_users()
+        keys: dict[int, int] = {}
+        now = time.time()
+        for k in store.list_api_keys():
+            if k.usable(now):
+                keys[k.user_id] = keys.get(k.user_id, 0) + 1
+        return page(request, "users.html", "users", users=users, key_counts=keys, roles=Role.ORDER,
+                    role_labels=Role.LABELS, form=ctx.pop("form", {}), **ctx)
+
+    def user_page(request: Request, user, **ctx) -> HTMLResponse:
+        principals, ad_error = None, None
+        try:
+            principals = sorted(accounts.principals(user), key=lambda p: pname(p).lower())
+        except Exception as exc:  # annuaire injoignable
+            ad_error = f"{type(exc).__name__} : {exc}"
+        return page(request, "user_edit.html", "users", u=user, keys=store.list_api_keys(user.id), now=time.time(),
+                    roles=Role.ORDER, role_labels=Role.LABELS, principals=principals, ad_error=ad_error,
+                    ad_unknown=bool(user.ad_login) and identity is not None and ad_error is None
+                    and not identity.principals(user.ad_login), **ctx)
+
+    def get_user_or_404(user_id: int):
+        user = store.get_user_by_id(user_id)
+        if user is None:
+            raise HTTPException(404, "Compte introuvable")
+        return user
+
+    @router.get("/utilisateurs", response_class=HTMLResponse)
+    def users_list(request: Request, _=Depends(require_admin)):
+        return users_page(request)
+
+    @router.post("/utilisateurs", response_class=HTMLResponse)
+    def users_create(request: Request, login: str = Form(""), nom: str = Form(""), role: str = Form(Role.USER),
+                     mot_de_passe: str = Form(""), ad_login: str = Form(""), groupes: str = Form(""),
+                     _=Depends(require_admin)):
+        from ged.accounts import AccountError, split_groups
+
+        form = {"login": login, "nom": nom, "role": role, "ad_login": ad_login, "groupes": groupes}
+        try:
+            user = accounts.create(login, nom, role, mot_de_passe, ad_login, split_groups(groupes))
+        except AccountError as exc:
+            return users_page(request, error=str(exc), form=form)
+        return RedirectResponse(f"/admin/utilisateurs/{user.id}?cree=1", status_code=303)
+
+    @router.get("/utilisateurs/{user_id}", response_class=HTMLResponse)
+    def users_edit(request: Request, user_id: int, cree: bool = False, _=Depends(require_admin)):
+        user = get_user_or_404(user_id)
+        return user_page(request, user, notice=("ok", "Compte créé.") if cree else None)
+
+    @router.post("/utilisateurs/{user_id}", response_class=HTMLResponse)
+    def users_update(request: Request, user_id: int, nom: str = Form(""), role: str = Form(Role.USER),
+                     ad_login: str = Form(""), groupes: str = Form(""), actif: bool = Form(False),
+                     me=Depends(require_admin)):
+        from ged.accounts import AccountError, split_groups
+
+        user = get_user_or_404(user_id)
+        try:
+            if role not in Role.ORDER:
+                raise AccountError("Rôle inconnu.")
+            if user.id == me.id and (role != Role.ADMIN or not actif):
+                raise AccountError("Vous ne pouvez pas retirer votre propre rôle d'administrateur ni désactiver "
+                                   "votre compte : demandez-le à un autre administrateur.")
+            accounts.guard_last_admin(user, role, actif)
+        except AccountError as exc:
+            return user_page(request, user, notice=("bad", str(exc)))
+        user.name, user.role, user.ad_login = nom.strip() or user.login, role, ad_login.strip()
+        user.groups, user.active = split_groups(groupes), actif
+        store.update_user(user)
+        import logging
+
+        logging.getLogger("alambic_search.comptes").info(
+            "Compte modifié par %s : %s (%s, %s)", me.login, user.login, role, "actif" if actif else "désactivé")
+        return user_page(request, user, notice=("ok", "Modifications enregistrées."))
+
+    @router.post("/utilisateurs/{user_id}/mot-de-passe", response_class=HTMLResponse)
+    def users_password(request: Request, user_id: int, mot_de_passe: str = Form(""), _=Depends(require_admin)):
+        from ged.accounts import AccountError
+
+        user = get_user_or_404(user_id)
+        try:
+            accounts.set_password(user, mot_de_passe)
+        except AccountError as exc:
+            return user_page(request, user, notice=("bad", str(exc)))
+        return user_page(request, user, notice=("ok", "Mot de passe défini. Les sessions ouvertes de ce compte "
+                                                      "sont fermées ; communiquez-le-lui par un canal sûr."))
+
+    @router.post("/utilisateurs/{user_id}/cles", response_class=HTMLResponse)
+    def users_new_key(request: Request, user_id: int, nom: str = Form(""), jours: int = Form(0),
+                      _=Depends(require_admin)):
+        user = get_user_or_404(user_id)
+        _key, value = accounts.new_api_key(user, nom, jours if jours > 0 else None)
+        return user_page(request, user, new_key=value)
+
+    @router.post("/utilisateurs/{user_id}/cles/{key_id}/revoquer", response_class=HTMLResponse)
+    def users_revoke_key(request: Request, user_id: int, key_id: int, _=Depends(require_admin)):
+        user = get_user_or_404(user_id)
+        if not any(k.id == key_id for k in store.list_api_keys(user.id)):
+            raise HTTPException(404, "Clé introuvable")
+        store.revoke_api_key(key_id)
+        return user_page(request, user, notice=("ok", "Clé révoquée."))
+
+    @router.post("/utilisateurs/{user_id}/supprimer", response_class=HTMLResponse)
+    def users_delete(request: Request, user_id: int, me=Depends(require_admin)):
+        from ged.accounts import AccountError
+
+        user = get_user_or_404(user_id)
+        try:
+            if user.id == me.id:
+                raise AccountError("Vous ne pouvez pas supprimer votre propre compte.")
+            accounts.guard_last_admin(user, deleting=True)
+        except AccountError as exc:
+            return user_page(request, user, notice=("bad", str(exc)))
+        store.delete_user(user.id)
+        return users_page(request, notice=("ok", f"Compte « {user.login} » supprimé, ainsi que ses clés d'API."))
 
     return router
 

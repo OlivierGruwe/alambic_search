@@ -3,7 +3,7 @@
 #   docker stack deploy -c deploy/swarm/stack.yml --with-registry-auth search
 #   (ou : make stack-deploy, qui charge deploy/swarm/stack.env)
 #
-# Variables (stack.env) : REGISTRY, TAG, SEARCH_HOST, SSO_HOST, LIGHT_URL, ACME_EMAIL.
+# Variables (stack.env) : REGISTRY, TAG, SEARCH_HOST, LIGHT_URL, ACME_EMAIL.
 # Secrets à créer AVANT le premier déploiement : deploy/swarm/secrets.sh.
 # Étiquettes de nœuds : alambic.db=true (base), alambic.gpu=true (modèles), alambic.edge=true (entrée).
 # Procédures : docs « Alambic Search — Dossier d'architecture et d'exploitation », onglet Exploitation.
@@ -15,17 +15,21 @@ x-search-env: &search-env
   SESSION_SECRET_FILE: /run/secrets/search_session_secret
   SECRETS_KEY_FILE: /run/secrets/search_secrets_key
   SECRETS_KEY_PREVIOUS_FILE: /run/secrets/search_secrets_key_previous
-  OIDC_CLIENT_SECRET_FILE: /run/secrets/search_oidc_client_secret
   ALAMBIC_LIGHT_API_KEY_FILE: /run/secrets/search_light_api_key
+  # ${ALAMBIC_LIGHT_URL} dans sources.yaml : Light vu depuis le Swarm (service de la stack « light »)
+  ALAMBIC_LIGHT_URL: ${LIGHT_URL:-http://light_api:8000}
+  DOCUMENTS_DIR: ${DOCUMENTS_DIR:-/data/partage}
   COOKIE_SECURE: "true"
   FORWARDED_ALLOW_IPS: "*"            # en-têtes X-Forwarded-* de Caddy (réseau interne seulement)
   SOURCES_FILE: /config/sources.yaml
-  EMBED_BASE_URL: http://ollama:11434/v1
-  LLM_BASE_URL: http://ollama:11434/v1
+  EMBED_BASE_URL: ${OLLAMA_URL:-http://ollama:11434}/v1
+  # LLM : Ollama de la stack par défaut ; Mistral AI : LLM_BASE_URL=https://api.mistral.ai/v1 et
+  # LLM_MODEL=mistral-small-latest dans stack.env, clé dans le secret search_llm_api_key (secrets.sh)
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
   LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
+  LLM_API_KEY_FILE: /run/secrets/search_llm_api_key
   CONVERT_URL: http://gotenberg:3000
   RERANK_URL: ${RERANK_URL:-http://rerank:80}
-  OIDC_INTERNAL_URL: http://keycloak:8080/realms/alambic
   CLIENT_NAME: ${CLIENT_NAME:-}
 
 x-search-secrets: &search-secrets
@@ -34,15 +38,15 @@ x-search-secrets: &search-secrets
   - search_session_secret
   - search_secrets_key
   - search_secrets_key_previous
-  - search_oidc_client_secret
   - search_light_api_key
+  - search_llm_api_key
 
 x-healthcheck: &api-health
-  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=9)"]
   interval: 15s
-  timeout: 5s
-  retries: 3
-  start_period: 60s
+  timeout: 10s
+  retries: 5                          # ~75 s sans réponse avant remplacement : une instance chargée n'est pas tuée
+  start_period: 120s                  # attente de la base (DB_WAIT) et des services au premier démarrage
 
 services:
   # Entrée HTTPS (certificats Let's Encrypt automatiques), seul service publié.
@@ -57,7 +61,6 @@ services:
         mode: host
     environment:
       SEARCH_HOST: ${SEARCH_HOST}
-      SSO_HOST: ${SSO_HOST}
       ACME_EMAIL: ${ACME_EMAIL}
     configs:
       - source: caddyfile
@@ -84,11 +87,12 @@ services:
         target: /config/sources.yaml
     networks: [edge, backend, alambic]
     healthcheck: *api-health
+    stop_grace_period: 40s            # synchro en cours interrompue proprement (SHUTDOWN_WAIT 25 s)
     deploy:
       replicas: 2
       placement:
-        max_replicas_per_node: 1
-        constraints: [node.role == worker]
+        constraints: ["node.role == ${APP_ROLE:-worker}"]
+        preferences: [{spread: node.id}]   # une réplique par nœud tant que possible (un seul nœud : les 2 dessus)
       resources:
         limits: {cpus: "2", memory: 2G}
         reservations: {memory: 512M}
@@ -109,16 +113,17 @@ services:
         target: /config/sources.yaml
     networks: [backend, alambic]
     healthcheck: *api-health
+    stop_grace_period: 40s            # synchro en cours interrompue proprement (SHUTDOWN_WAIT 25 s)
     deploy:
       replicas: 1
       placement:
-        constraints: [node.role == worker]
+        constraints: ["node.role == ${APP_ROLE:-worker}"]
       resources:
         limits: {cpus: "4", memory: 4G}
       update_config: {order: stop-first, failure_action: rollback, monitor: 60s}
       restart_policy: {condition: any, delay: 10s}
 
-  # PostgreSQL 16 + pgvector : index, sources, secrets chiffrés, historique ; base « keycloak » aussi.
+  # PostgreSQL 16 + pgvector : index, sources, secrets chiffrés, comptes, historique.
   db:
     image: pgvector/pgvector:pg16
     environment:
@@ -149,7 +154,7 @@ services:
       update_config: {order: stop-first}
       restart_policy: {condition: any, delay: 5s}
 
-  # Sauvegarde quotidienne (pg_dump des bases ged et keycloak), sur le nœud de la base.
+  # Sauvegarde quotidienne (pg_dump de la base ged), sur le nœud de la base.
   backup:
     image: pgvector/pgvector:pg16
     entrypoint: ["/bin/sh", "/backup.sh"]
@@ -183,16 +188,16 @@ services:
       replicas: 1
       placement:
         constraints: [node.labels.alambic.gpu == true]
-      resources:
-        reservations:
-          generic_resources:
-            - discrete_resource_spec: {kind: NVIDIA-GPU, value: 1}
+      # Réservation de la carte NVIDIA : stack.gpu.yml (ajouté par make stack-deploy sauf STACK_GPU=0)
       restart_policy: {condition: any, delay: 5s}
 
   # Reclassement des résultats (bge-reranker-v2-m3). CPU par défaut ; GPU : RERANK_IMAGE …:1.8.
   rerank:
     image: ${RERANK_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.8}
-    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--max-client-batch-size", "64"]
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--max-client-batch-size", "64",
+              # lots plus petits : mémoire bornée en CPU (16 384 par défaut dépasse 6 Go au préchauffage) ;
+              # passages de ~400 tokens, la troncature ne touche que des entrées anormales
+              "--max-batch-tokens", "${RERANK_BATCH_TOKENS:-4096}", "--auto-truncate"]
     volumes:
       - rerank:/data
     networks: [backend]
@@ -211,49 +216,16 @@ services:
     deploy:
       replicas: 2
       placement:
-        constraints: [node.role == worker]
+        constraints: ["node.role == ${APP_ROLE:-worker}"]
       resources:
         limits: {cpus: "2", memory: 2G}
       restart_policy: {condition: any, delay: 5s}
 
-  # Connexion unique (OIDC) pour Alambic Search, Alambic Light et le portail. Mode production :
-  # base PostgreSQL « keycloak », derrière Caddy (HTTPS), royaume importé au premier démarrage.
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.0
-    command: ["start", "--import-realm"]
-    environment:
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://db:5432/keycloak
-      KC_DB_USERNAME: ged
-      KC_DB_PASSWORD_FILE: /run/secrets/search_db_password
-      KC_HOSTNAME: https://${SSO_HOST}
-      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"   # appels serveur à serveur sur keycloak:8080
-      KC_HTTP_ENABLED: "true"
-      KC_PROXY_HEADERS: xforwarded
-      KC_HEALTH_ENABLED: "true"
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
-    entrypoint: ["/bin/sh", "-c", "export KC_DB_PASSWORD=$$(cat $$KC_DB_PASSWORD_FILE) KC_BOOTSTRAP_ADMIN_PASSWORD=$$(cat $$KC_BOOTSTRAP_ADMIN_PASSWORD_FILE); exec /opt/keycloak/bin/kc.sh \"$$@\"", "--"]
-    secrets: [search_db_password, keycloak_admin_password]
-    configs:
-      - source: realm
-        target: /opt/keycloak/data/import/realm-alambic.json
-    networks: [edge, backend, alambic]
-    deploy:
-      replicas: 1
-      placement:
-        constraints: [node.role == worker]
-      resources:
-        limits: {memory: 1536M}
-      update_config: {order: stop-first}
-      restart_policy: {condition: any, delay: 10s}
-
 networks:
-  edge:                               # Caddy ↔ api, keycloak
+  edge:                               # Caddy ↔ api
     driver: overlay
-  backend:                            # services internes, chiffré entre les nœuds (IPsec)
+  backend:                            # services internes ; chiffré entre les nœuds (IPsec) par stack.chiffre.yml
     driver: overlay
-    driver_opts: {encrypted: "true"}
   alambic:                            # partagé avec la stack d'Alambic Light (créé une fois, voir secrets.sh)
     external: true
     name: alambic
@@ -281,9 +253,8 @@ secrets:
   search_secrets_key: {external: true, name: "${SECRETS_KEY_SECRET:-search_secrets_key}"}
   # ancienne clé, le temps d'une rotation (par défaut : la clé courante, sans effet)
   search_secrets_key_previous: {external: true, name: "${SECRETS_KEY_PREVIOUS_SECRET:-search_secrets_key}"}
-  search_oidc_client_secret: {external: true, name: "${OIDC_CLIENT_SECRET_SECRET:-search_oidc_client_secret}"}
   search_light_api_key: {external: true, name: "${LIGHT_API_KEY_SECRET:-search_light_api_key}"}
-  keycloak_admin_password: {external: true, name: "${KEYCLOAK_ADMIN_PASSWORD_SECRET:-keycloak_admin_password}"}
+  search_llm_api_key: {external: true, name: "${LLM_API_KEY_SECRET:-search_llm_api_key}"}   # « aucune » : LLM local
 
 configs:
   caddyfile:
@@ -298,6 +269,3 @@ configs:
   backup_script:
     file: ./backup.sh
     name: search_backup_${CONFIG_VERSION:-1}
-  realm:
-    file: ../../keycloak/realm-alambic.json
-    name: search_realm_${CONFIG_VERSION:-1}

@@ -44,6 +44,15 @@ class MassDeletionGuard(Exception):
     """Trop de documents ont disparu d'un coup : probablement un partage démonté, pas une vraie suppression."""
 
 
+class SyncInterrupted(Exception):
+    """Arrêt du service pendant la synchro (mise à jour, redémarrage) : les documents non traités
+    restent tels quels, ils seront repris au passage suivant."""
+
+    def __init__(self, report):
+        super().__init__("Service arrêté pendant la synchronisation : reprise au passage suivant")
+        self.report = report
+
+
 @dataclass
 class SyncReport:
     added: int = 0
@@ -95,7 +104,8 @@ class Progress:
 
 class _Indexer:
     def __init__(self, connector, store, embedder, analyzer, report, max_chars, overlap, converter=None,
-                 analyse: bool = True, ocr_ia: bool = False):
+                 analyse: bool = True, ocr_ia: bool = False, cancel: threading.Event | None = None):
+        self.cancel = cancel or threading.Event()
         self.converter: OfficeConverter | None = converter
         self.connector = connector
         self.store = store
@@ -120,11 +130,16 @@ class _Indexer:
         self.store.upsert_document(ref, content_hash, acl, Status.ERROR, [], [], error=str(exc))
 
     def index(self, ref: DocumentRef, acl: Acl, prev: DocState | None, data: bytes, content_hash: str) -> None:
+        if self.cancel.is_set():
+            return  # arrêt demandé avant son tour : document laissé tel quel, repris au passage suivant
         try:
             self._index(ref, acl, prev, data, content_hash)
         except DocumentRejected as exc:
             self.fail(ref, acl, exc, content_hash)
         except Exception as exc:  # un document en échec ne bloque pas les autres
+            if self.cancel.is_set():  # client fermé par l'arrêt du service : pas une erreur du document
+                log.info("Arrêt du service : %s sera repris au passage suivant", ref.path)
+                return
             self.fail(ref, acl, exc)
 
     def _index(self, ref, acl, prev, data, content_hash) -> None:
@@ -258,9 +273,12 @@ def sync_source(
     progress: Progress | None = None,
     analyse: bool | None = None,
     ocr_ia: bool | None = None,
+    cancel: threading.Event | None = None,
 ) -> SyncReport:
     """`analyse` : type et données par Alambic Light (défaut : réglage de la source, analyse_light).
-    False : texte seul, Alambic Light ne sert qu'à l'OCR des scans (ocr_only)."""
+    False : texte seul, Alambic Light ne sert qu'à l'OCR des scans (ocr_only).
+    `cancel` : arrêt du service demandé ; lève SyncInterrupted, sans suppression ni erreur."""
+    cancel = cancel or threading.Event()
     report = SyncReport()
     if analyse is None:
         analyse = getattr(connector, "analyse_light", True)
@@ -271,7 +289,8 @@ def sync_source(
     progress = progress or Progress()
     known = store.get_state(connector.name)
     seen: set[str] = set()
-    ix = _Indexer(connector, store, embedder, analyzer, report, max_chars, overlap, converter, analyse, ocr_ia)
+    ix = _Indexer(connector, store, embedder, analyzer, report, max_chars, overlap, converter, analyse, ocr_ia,
+                  cancel)
 
     workers = analyzer.concurrency if analyzer else 1
     slots = threading.BoundedSemaphore(workers * 2)  # fichiers lus en attente d'analyse : mémoire bornée
@@ -292,6 +311,8 @@ def sync_source(
 
     try:
         for ref in refs:
+            if cancel.is_set():
+                break
             seen.add(ref.doc_id)
             acl = connector.acl(ref)
             prev = known.get(ref.doc_id)
@@ -324,7 +345,9 @@ def sync_source(
             future = pool.submit(ix.index, ref, acl, prev, data, content_hash)
             future.add_done_callback(lambda f, p=ref.path: finished(f, p))
     finally:
-        pool.shutdown(wait=True)
+        pool.shutdown(wait=True, cancel_futures=cancel.is_set())
+    if cancel.is_set():  # liste incomplète : surtout ne rien supprimer
+        raise SyncInterrupted(report)
 
     if analyzer and analyse:
         progress.phase = "validations"

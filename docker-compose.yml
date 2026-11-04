@@ -43,7 +43,8 @@ services:
   # make rerank-modele (téléchargé sur le poste dans ./models), puis RERANK_MODEL_ID=/models/bge-reranker-v2-m3.
   rerank:
     image: ${RERANK_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.8}
-    command: ["--model-id", "${RERANK_MODEL_ID:-BAAI/bge-reranker-v2-m3}", "--max-client-batch-size", "64"]
+    command: ["--model-id", "${RERANK_MODEL_ID:-BAAI/bge-reranker-v2-m3}", "--max-client-batch-size", "64",
+              "--max-batch-tokens", "${RERANK_BATCH_TOKENS:-4096}", "--auto-truncate"]   # mémoire bornée en CPU
     ports:
       - "127.0.0.1:8082:80"     # accès depuis le poste (make run) ; jamais exposé au réseau
     volumes:
@@ -51,29 +52,6 @@ services:
       - ./models:/models:ro
     profiles: ["rerank"]
     restart: unless-stopped
-
-  # Connexion unique (OIDC) pour Alambic Search, Alambic Light et le portail.
-  # Mode développement : royaume « alambic » importé au premier démarrage (keycloak/realm-alambic.json),
-  # comptes de démo olivier / alice / bob (mot de passe : demo). Console : http://localhost:8180/admin
-  # Les navigateurs le joignent sur localhost:8180 (émetteur des jetons) ; le conteneur api sur
-  # keycloak:8180 (oidc.url_interne).
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.0
-    command: ["start-dev", "--import-realm"]
-    environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      KC_HOSTNAME: http://localhost:8180
-      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"   # appels serveur à serveur acceptés sur keycloak:8180
-      KC_HTTP_PORT: "8180"
-    ports:
-      - "127.0.0.1:8180:8180"
-    volumes:
-      - ./keycloak:/opt/keycloak/data/import:ro
-      - keycloak:/opt/keycloak/data
-    profiles: ["sso"]   # démarré seulement avec make sso (ou --profile sso)
-    # alambic_sso : réseau partagé avec la pile d'Alambic Light, qui joint Keycloak sur keycloak:8180
-    networks: [default, alambic_sso]
 
   api:
     build: .
@@ -93,20 +71,18 @@ services:
       CONVERT_URL: http://gotenberg:3000
       # Reclassement : seulement si RERANK_URL est renseigné dans .env, joint alors dans Docker
       RERANK_URL: ${RERANK_URL:+http://rerank:80}
-      OIDC_INTERNAL_URL: http://keycloak:8180/realms/alambic   # oidc.url_interne dans sources.yaml
       DATABASE_URL: postgresql://ged:ged@db:5432/ged
       EMBED_BASE_URL: http://ollama:11434/v1
       EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
       EMBED_DIM: ${EMBED_DIM:-1024}
-      LLM_BASE_URL: http://ollama:11434/v1
+      LLM_BASE_URL: ${LLM_BASE_URL_DOCKER:-http://ollama:11434/v1}   # Mistral : https://api.mistral.ai/v1
       LLM_MODEL: ${LLM_MODEL-qwen2.5:7b}   # vide dans .env : pas de LLM, réponses = extraits
       SOURCES_FILE: /config/sources.yaml
       DOCUMENTS_DIR: /data/partage   # ${DOCUMENTS_DIR} dans sources.yaml = dossier monté ci-dessous
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Définir ADMIN_PASSWORD (console d'administration)}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}   # premier démarrage : mot de passe du compte « admin »
       TZ: Europe/Paris
       SESSION_SECRET: ${SESSION_SECRET:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
       SMB_PASSWORD: ${SMB_PASSWORD:-}
       LDAP_PASSWORD: ${LDAP_PASSWORD:-}
       # Alambic Light lancé à part sur le poste : joint via host.docker.internal
@@ -124,12 +100,7 @@ services:
     ports:
       - "8002:8000"   # 8002 côté poste (8000 souvent déjà pris)
 
-networks:
-  alambic_sso:
-    external: true   # créé par make sso (docker network create alambic_sso)
-
 volumes:
   rerank:
-  keycloak:
   pgdata:
   ollama:

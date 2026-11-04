@@ -1,0 +1,10 @@
+# Ajouté par make stack-deploy (sauf STACK_GPU=0) : Ollama réserve une carte NVIDIA.
+# Prérequis sur le nœud GPU : runtime nvidia par défaut et carte déclarée au démon (voir l'architecture).
+# Sans carte déclarée (Docker Desktop, poste de dev), la tâche reste « insufficient resources » : STACK_GPU=0.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          generic_resources:
+            - discrete_resource_spec: {kind: NVIDIA-GPU, value: 1}

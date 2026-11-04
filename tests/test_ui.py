@@ -13,10 +13,9 @@ def client_for(connector, store, embedder, password="secret"):
     return TestClient(app), app
 
 
-def test_console_disabled_without_password(connector, store, embedder):
+def test_console_without_any_account(connector, store, embedder):
     c, _ = client_for(connector, store, embedder, password=None)
-    r = c.get("/admin", auth=AUTH)
-    assert r.status_code == 503 and "ADMIN_PASSWORD" in r.text
+    assert c.get("/admin", auth=AUTH).status_code == 401  # aucun compte : personne n'entre
 
 
 def test_console_requires_credentials(connector, store, embedder):
@@ -108,12 +107,13 @@ def test_sandbox_reports_engine_failure(connector, store, embedder):
 
 
 def test_shared_bandeau_on_console_and_user_pages(connector, store, embedder):
-    """Charte Alambic : même bandeau (marque, applications, compte) partout."""
+    """Charte Alambic : même bandeau (marque, compte et son menu) partout, sans portail."""
     c, _ = client_for(connector, store, embedder)
     html = c.get("/admin/documents", auth=AUTH).text
     assert 'class="al-bar"' in html and "<b>alambic</b> <span>search</span>" in html
     assert 'class="al-nav"' in html and 'aria-current="page"' in html
-    assert "Administration" in html and "Administrateur" in html  # console : accès admin, compte « Basic »
+    assert "Applications" not in html and "Portail" not in html
+    assert "Administrateur" in html and 'href="/admin/utilisateurs"' in html  # compte admin (HTTP Basic)
     assert "alambic-ui/alambic.css" in html
 
 

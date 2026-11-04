@@ -1,7 +1,7 @@
 """Droits : de quoi est fait un « principal », et pourquoi un document est (ou n'est pas) visible.
 
 Un document porte des principaux autorisés et refusés (traduits par son connecteur) ; un
-utilisateur a ses principaux (annuaire ou jeton Keycloak). Visible = au moins un en commun, et
+utilisateur a ses principaux (compte : identifiant AD rattaché et/ou groupes saisis). Visible = au moins un en commun, et
 aucun refus. Ce module classe les principaux par nature et repère ce que personne ne peut avoir.
 """
 from __future__ import annotations
@@ -61,11 +61,11 @@ def user_warnings(principals: frozenset[str], index_kinds: set[str]) -> list[str
     out = []
     if not principals - SPECIAL - {p for p in principals if p.startswith("u:")}:
         out.append("Aucun groupe : l'utilisateur ne verra que les documents ouverts à tous ou à son nom. "
-                   "Identifiant inconnu de l'annuaire, ou jeton Keycloak sans groupes ?")
+                   "Rattacher le compte à son identifiant AD, ou lui saisir des groupes (page Utilisateurs).")
     if "sid" in index_kinds and "sid" not in own:
         out.append("Aucun SID Windows : les documents des partages Windows (SMB) et de SharePoint, dont les "
-                   "droits sont des SID, lui restent invisibles. Avec Keycloak, passer en « groupes: annuaire » "
-                   "(groupes lus dans l'AD) plutôt qu'en « groupes: jeton ».")
+                   "droits sont des SID, lui restent invisibles. Rattacher le compte à son identifiant AD "
+                   "(page Utilisateurs) : ses SID sont alors lus dans l'annuaire.")
     if "name" in index_kinds and "name" not in own and "sid" in own:
         out.append("Aucun nom de groupe : les règles par dossier (dossier, FTP, S3) et les groupes Alfresco ou "
                    "CMIS, écrits avec des noms, ne lui donnent rien.")

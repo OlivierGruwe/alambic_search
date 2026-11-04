@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Utilisateurs{% endblock %}
+{% from "_macros.html" import label %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>Utilisateurs</h1>
+    <p class="lede">Les comptes d'Alambic Search. Le rôle donne accès aux pages ; les documents visibles viennent du compte Windows rattaché et des groupes saisis (voir <a href="/admin/droits">Droits</a>).</p>
+  </div>
+</header>
+{% if notice %}<p class="notice notice-{{ notice[0] }}" role="status" style="margin-bottom: 16px">{{ notice[1] }}</p>{% endif %}
+
+<section class="section">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Compte</th><th>Rôle</th><th>Compte Windows</th><th>Groupes saisis</th><th class="num">Clés d'API</th><th>Dernière connexion</th><th>État</th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr class="clickable{% if not u.active %} user-off{% endif %}" onclick="location.href='/admin/utilisateurs/{{ u.id }}'">
+        <td><a href="/admin/utilisateurs/{{ u.id }}" class="fname">{{ u.login }}</a>{% if u.name != u.login %}<span class="sub">{{ u.name }}</span>{% endif %}</td>
+        <td>{{ role_labels[u.role] }}</td>
+        <td>{{ u.ad_login or "—" }}</td>
+        <td>{% if u.groups %}<span class="groups">{% for g in u.groups[:4] %}<span class="group">{{ g }}</span>{% endfor %}{% if u.groups|length > 4 %}<span class="sub">+{{ u.groups|length - 4 }}</span>{% endif %}</span>{% else %}—{% endif %}</td>
+        <td class="num">{{ key_counts.get(u.id, 0) or "—" }}</td>
+        <td class="nowrap">{{ u.last_login|when if u.last_login else "jamais" }}</td>
+        <td>{% if u.active %}<span class="status ok">Actif</span>{% else %}<span class="status muted">Désactivé</span>{% endif %}{% if not u.password_hash %} <span class="status info" title="Pas de mot de passe : clés d'API seulement">API</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="section" aria-labelledby="new-title">
+  <h2 id="new-title">Nouveau compte</h2>
+  {% if error %}<div class="error-box" role="alert" style="margin-bottom: 16px">{{ error }}</div>{% endif %}
+  <form class="sandbox-form" method="post" action="/admin/utilisateurs" autocomplete="off">
+    <div class="field">{{ label("u-login", "Identifiant", "Pour se connecter : lettres, chiffres, . _ - @, sans espace. Le plus simple : le même que sous Windows.") }}
+      <input id="u-login" name="login" value="{{ form.login or '' }}" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._@\-]*" placeholder="ex. alice"></div>
+    <div class="field"><label for="u-name">Nom affiché</label>
+      <input id="u-name" name="nom" value="{{ form.nom or '' }}" maxlength="120" placeholder="ex. Alice Martin"></div>
+    <div class="field">{{ label("u-role", "Rôle", "Utilisateur : recherche et API. Gestionnaire : en plus, la console (sources, documents, synchros, droits, bac à sable). Administrateur : en plus, les comptes.") }}
+      <select id="u-role" name="role">{% for r in roles %}<option value="{{ r }}" {% if (form.role or 'utilisateur') == r %}selected{% endif %}>{{ role_labels[r] }}</option>{% endfor %}</select></div>
+    <div class="field">{{ label("u-pw", "Mot de passe", "10 caractères au moins ; l'utilisateur pourra le changer dans « Mon compte ». Vide : pas de connexion par mot de passe, clés d'API seulement (compte d'application).") }}
+      <input id="u-pw" name="mot_de_passe" type="password" minlength="10" autocomplete="new-password"></div>
+    <div class="field">{{ label("u-ad", "Compte Windows", ("Identifiant dans l'annuaire (AD) : le compte reçoit ses droits Windows (SID et groupes)." if has_identity else "Aucun annuaire configuré (section identity de sources.yaml) : sans effet pour l'instant.")) }}
+      <input id="u-ad" name="ad_login" value="{{ form.ad_login or '' }}" maxlength="120" placeholder="ex. alice"></div>
+    <div class="field">{{ label("u-groups", "Groupes", "Noms de groupes, séparés par des virgules : ceux des règles par dossier (dossier, FTP, S3) et des GED. Ne donnent pas accès aux partages Windows ni à SharePoint (droits en SID).") }}
+      <input id="u-groups" name="groupes" value="{{ form.groupes or '' }}" placeholder="ex. compta, direction"></div>
+    <div class="wide"><button class="btn" type="submit">Créer le compte</button></div>
+  </form>
+</section>
+{% endblock %}

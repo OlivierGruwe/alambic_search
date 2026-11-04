@@ -209,3 +209,86 @@ def test_settings_and_bootstrap_once(pg, share):
     assert pg.get_setting(IMPORTED)["sources"] == ["p"]
     pg.delete_source_config("p")
     assert bootstrap(pg, src) == []  # une seule fois : une source supprimée ne revient pas
+
+
+def test_accounts_and_api_keys(pg):
+    import time
+
+    import psycopg
+
+    from ged.accounts import Accounts
+    from ged.models import Role
+
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        conn.execute("DELETE FROM api_keys; DELETE FROM users;")
+    a = Accounts(pg)
+    assert a.bootstrap("premier-mdp") and a.bootstrap("x") is None
+    u = a.create("Alice", "Alice M.", Role.USER, "alice-mdp-123", ad_login="alice.ad", groups=["compta", "rh"])
+    assert pg.get_user("alice").id == u.id and pg.get_user("ALICE").groups == ["compta", "rh"]
+    assert a.authenticate("alice", "alice-mdp-123").login == "Alice" and not a.authenticate("alice", "faux")
+    pg.touch_login(u.id)
+    assert pg.get_user_by_id(u.id).last_login > time.time() - 60
+    u.role, u.groups, u.active = Role.MANAGER, [], False
+    pg.update_user(u)
+    assert (pg.get_user("alice").role, pg.get_user("alice").groups, pg.get_user("alice").active) == (Role.MANAGER, [], False)
+    key, value = a.new_api_key(pg.get_user("admin"), "Export", days=30)
+    assert a.from_api_key(value).login == "admin" and pg.get_api_key(key.prefix).expires_at > time.time()
+    pg.revoke_api_key(key.id)
+    assert a.from_api_key(value) is None and pg.list_api_keys()[0].revoked_at is not None
+    pg.delete_user(pg.get_user("admin").id)
+    assert pg.list_api_keys() == [] and [x.login for x in pg.list_users()] == ["Alice"]
+
+
+def test_concurrent_init_on_empty_database(embedder):
+    """Swarm : plusieurs instances initialisent en même temps une base vide (extension comprise)."""
+    import threading
+    import uuid
+
+    import psycopg
+
+    name = f"gedtest_init_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        conn.execute(f"CREATE DATABASE {name}")
+    dsn = DSN.rsplit("/", 1)[0] + "/" + name
+    errors: list = []
+    stores = [PgStore(dsn, embedder.dim) for _ in range(4)]
+
+    def run(s):
+        try:
+            s.init()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    try:
+        threads = [threading.Thread(target=run, args=(s,)) for s in stores]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+    finally:
+        for s in stores:
+            s.close()
+        with psycopg.connect(DSN, autocommit=True) as conn:
+            conn.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+
+
+def test_nul_bytes_are_stripped(pg, embedder):
+    """Certains PDF et OCR contiennent des NUL (0x00), que PostgreSQL refuse dans text et jsonb."""
+    from ged.chunking import chunk_pages
+    from ged.extract import Page
+    from ged.models import Acl, DocMeta, DocumentRef, Status
+
+    chunks = chunk_pages([Page(1, "Facture\x00 n° 42\x00\n\nMontant : 100 €")])
+    assert all("\x00" not in c.text for c in chunks)
+    ref = DocumentRef("nul", "doc.pdf", "Compta/doc\x00.pdf", 0.0, 10)
+    meta = DocMeta("FACTURE", "Fact\x00ure", {"numero": "42\x00", "lignes": [{"x\x00": "a\x00"}]}, ("numero\x00",),
+                   "u", "RECONNU")
+    raw = [type(chunks[0])(0, 1, "texte\x00brut")]
+    pg.upsert_document(ref, "h", Acl(frozenset({"compta"})), Status.INDEXED, raw, embedder.embed(["x"]),
+                       error="err\x00", meta=meta)
+    pg.update_meta("nul", "doc.pdf", meta, "fiche\x00", embedder.embed(["x"])[0])
+    row = pg.list_documents(source="nul")[0][0]
+    assert row.path == "Compta/doc.pdf" and row.meta.fields["numero"] == "42" and row.meta.label == "Facture"
+    assert pg.document_chunks("nul", row.doc_id)[0].text in ("textebrut", "fiche")
+    pg.purge_source("nul")

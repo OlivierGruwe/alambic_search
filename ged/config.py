@@ -19,6 +19,7 @@ class Settings:
     embed_dim: int
     llm_base_url: str
     llm_model: str
+    llm_api_key: str  # service en ligne (Mistral AI…) ; vide : LLM auto-hébergé
     sources_file: str
     convert_url: str  # Gotenberg (conversion PDF des fichiers bureautiques), vide = désactivée
 
@@ -30,9 +31,14 @@ class Settings:
             embed_base_url=os.environ.get("EMBED_BASE_URL", "http://127.0.0.1:11434/v1"),
             embed_model=os.environ.get("EMBED_MODEL", "bge-m3"),
             embed_dim=int(os.environ.get("EMBED_DIM", "1024")),
-            llm_base_url=os.environ.get("LLM_BASE_URL", "http://127.0.0.1:11434/v1"),
+            # vide : même serveur que les vecteurs (Ollama)
+            llm_base_url=os.environ.get("LLM_BASE_URL", "").strip()
+            or os.environ.get("EMBED_BASE_URL", "http://127.0.0.1:11434/v1"),
             # Vide : pas de LLM, les questions renvoient les extraits pertinents sans formulation
             llm_model=os.environ.get("LLM_MODEL", "qwen2.5:7b").strip(),
+            # LLM_API_KEY_FILE (secret Docker) lu par envfiles ; « aucune » : pas de clé
+            llm_api_key="" if os.environ.get("LLM_API_KEY", "").strip().lower() in ("", "aucune", "none")
+            else os.environ["LLM_API_KEY"].strip(),
             sources_file=os.environ.get("SOURCES_FILE", "sources.yaml"),
             convert_url=os.environ.get("CONVERT_URL", "").strip(),
         )
@@ -362,43 +368,6 @@ def load_schedule(path: str | Path) -> dict[str, float]:
         if minutes:
             out[src["name"]] = minutes
     return out
-
-
-def load_oidc(path: str | Path):
-    """Connexion unique (section `oidc`, Keycloak ou autre fournisseur OIDC), ou None."""
-    cfg = _read(path).get("oidc")
-    if not cfg:
-        return None
-    from ged.oidc import OidcClient
-
-    where = "oidc"
-    for key in ("issuer", "client_id"):
-        if not str(cfg.get(key) or "").strip():
-            raise ConfigError(f"{where} : {key} obligatoire")
-    try:
-        return OidcClient(
-            _expand(cfg["issuer"], where), _expand(cfg["client_id"], where),
-            _secret(cfg, "client_secret", where),
-            groups_mode=str(cfg.get("groupes", "annuaire")), groups_claim=str(cfg.get("claim_groupes", "groups")),
-            public_url=_expand(cfg.get("url_publique", ""), where) or None,
-            internal_url=_expand(cfg.get("url_interne", ""), where) or None,
-        )
-    except ValueError as exc:
-        raise ConfigError(str(exc)) from exc
-
-
-def load_portal(path: str | Path) -> list[dict]:
-    """Applications du portail (section `portail`) : nom, url, description, rôle requis."""
-    apps = []
-    for i, app in enumerate(_read(path).get("portail") or [], 1):
-        if not isinstance(app, dict) or not app.get("nom") or not app.get("url"):
-            raise ConfigError(f"portail, application {i} : nom et url obligatoires")
-        url = _expand(app["url"], f"portail ({app['nom']})")
-        if not (url.startswith("/") or re.match(r"^https?://", url)):
-            raise ConfigError(f"portail ({app['nom']}) : url invalide « {url} »")
-        apps.append({"nom": str(app["nom"]), "url": url, "description": str(app.get("description") or ""),
-                     "role": str(app.get("role") or "") or None})
-    return apps
 
 
 def load_identity(path: str | Path):

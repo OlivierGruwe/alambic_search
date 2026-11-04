@@ -191,3 +191,55 @@ class Status:
     OCR_REQUIRED = "ocr_required"  # aucun texte extractible et pas d'Alambic Light configuré
     UNSUPPORTED = "unsupported"
     ERROR = "error"
+
+
+# --- Comptes ----------------------------------------------------------------------------
+
+class Role:
+    """Rôles d'Alambic Search, du moins au plus étendu."""
+
+    USER = "utilisateur"  # recherche, API, son compte et ses clés d'API
+    MANAGER = "gestionnaire"  # + console : sources, documents, synchros, droits, bac à sable
+    ADMIN = "admin"  # + comptes et clés d'API de tous
+
+    ORDER = (USER, MANAGER, ADMIN)
+    LABELS = {USER: "Utilisateur", MANAGER: "Gestionnaire", ADMIN: "Administrateur"}
+
+    @classmethod
+    def at_least(cls, role: str, required: str) -> bool:
+        return role in cls.ORDER and cls.ORDER.index(role) >= cls.ORDER.index(required)
+
+
+@dataclass
+class User:
+    """Compte d'Alambic Search. Droits sur les documents : ceux de son identifiant AD (ad_login,
+    lus dans l'annuaire) et/ou les groupes saisis à la main (groups)."""
+
+    id: int
+    login: str
+    name: str
+    role: str
+    password_hash: str = ""  # vide : connexion par mot de passe impossible (clés d'API seulement)
+    ad_login: str = ""
+    groups: list[str] = field(default_factory=list)
+    active: bool = True
+    created_at: float = 0.0
+    last_login: float | None = None
+
+
+@dataclass
+class ApiKey:
+    """Clé d'API : agit avec le rôle et les droits de son propriétaire. Seule l'empreinte est gardée."""
+
+    id: int
+    user_id: int
+    name: str
+    prefix: str  # partie publique, affichée pour reconnaître la clé
+    key_hash: str
+    created_at: float = 0.0
+    expires_at: float | None = None
+    last_used: float | None = None
+    revoked_at: float | None = None
+
+    def usable(self, now: float) -> bool:
+        return self.revoked_at is None and (self.expires_at is None or self.expires_at > now)

@@ -207,6 +207,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outl
 
 /* Pages des utilisateurs */
 .user-main { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+.al-main > .user-main { padding: 0; max-width: 1040px; margin: 0; }
 .login-card { max-width: 440px; margin: 40px auto; }
 .login-card h1 { margin: 0; }
 .login-form { display: flex; flex-direction: column; gap: 16px; margin-top: 20px; }
@@ -248,14 +249,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outl
 .kind-intro { grid-column: 1 / -1; margin: -4px 0 0; padding: 10px 14px; border: 1px solid var(--al-line);
   background: var(--al-info-soft); border-radius: 6px; font-size: .88rem; color: var(--al-info); }
 
-/* Portail */
-.app-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
-.app-tile { display: flex; flex-direction: column; gap: 8px; height: 100%; padding: 22px 24px; background: var(--surface);
-  border: 1px solid var(--line); border-radius: 8px; color: var(--ink); text-decoration: none; transition: border-color .12s, box-shadow .12s; }
-.app-tile:hover, .app-tile:focus-visible { border-color: var(--teal); box-shadow: 0 4px 16px rgba(14, 33, 64, .08); text-decoration: none; }
-.app-name { font-weight: 600; font-size: 1.05rem; color: var(--navy); }
-.app-desc { color: var(--ink-2); font-size: .93rem; }
-
 /* Fiche document : validation dans Alambic Light */
 .light-validate { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -4px 0 16px; }
 .light-validate .hint { flex-basis: 100%; margin: 0; }
@@ -292,3 +285,20 @@ a.thumb:hover, a.thumb:focus-visible { border-color: var(--al-accent, #A9561F); 
 .rights-source { border-top: 1px solid var(--line); padding: 10px 0; }
 .rights-source > summary { cursor: pointer; padding: 4px 0; }
 .rights-source[open] > summary { margin-bottom: 8px; }
+
+/* --- Comptes et clés d'API ----------------------------------------------------------- */
+
+.key-box { border: 1px solid #e7c98a; background: #fffaf0; border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; }
+.key-box p { margin: 0 0 8px; }
+.key-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.key-row code { flex: 1 1 320px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 6px; word-break: break-all; font-size: .9rem; }
+.inline-form { display: flex; gap: 12px 18px; align-items: flex-end; flex-wrap: wrap; margin-top: 16px; }
+.inline-form .field { min-width: 200px; }
+.inline-form .btn { margin-bottom: 1px; }
+.user-off td:not(:last-child) { color: var(--ink-3, #8a94a6); }
+.account-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+.account-main { max-width: 1040px; margin: 0 auto; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: .95rem; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; }
+.status.info { color: var(--al-info); background: var(--al-info-soft); }

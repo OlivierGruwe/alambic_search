@@ -21,7 +21,21 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Protocol
 
-from ged.models import Acl, Chunk, DocMeta, DocRow, DocState, DocumentRef, Hit, Match, RunStatus, Status, SyncRun
+from ged.models import (
+    Acl,
+    ApiKey,
+    Chunk,
+    DocMeta,
+    DocRow,
+    DocState,
+    DocumentRef,
+    Hit,
+    Match,
+    RunStatus,
+    Status,
+    SyncRun,
+    User,
+)
 
 RRF_K = 60
 
@@ -89,6 +103,20 @@ class Store(Protocol):
     def purge_source(self, name: str) -> int: ...
     def get_setting(self, key: str): ...
     def set_setting(self, key: str, value) -> None: ...
+
+    # --- Comptes et clés d'API ---------------------------------------------------------
+    def list_users(self) -> list[User]: ...
+    def get_user(self, login: str) -> User | None: ...
+    def get_user_by_id(self, user_id: int) -> User | None: ...
+    def create_user(self, user: User) -> int: ...
+    def update_user(self, user: User) -> None: ...
+    def delete_user(self, user_id: int) -> None: ...
+    def touch_login(self, user_id: int) -> None: ...
+    def create_api_key(self, key: ApiKey) -> int: ...
+    def list_api_keys(self, user_id: int | None = None) -> list[ApiKey]: ...
+    def get_api_key(self, prefix: str) -> ApiKey | None: ...
+    def revoke_api_key(self, key_id: int) -> None: ...
+    def touch_api_key(self, key_id: int) -> None: ...
 
     # --- Console d'administration --------------------------------------------------
     def stats(self) -> dict[str, Counter]: ...
@@ -231,6 +259,34 @@ CREATE TABLE IF NOT EXISTS source_secrets (
     updated_at  timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (source, field)
 );
+
+-- Comptes d'Alambic Search (mot de passe : empreinte scrypt, jamais le mot de passe)
+CREATE TABLE IF NOT EXISTS users (
+    id             bigserial PRIMARY KEY,
+    login          text NOT NULL UNIQUE,
+    name           text NOT NULL DEFAULT '',
+    role           text NOT NULL,
+    password_hash  text NOT NULL DEFAULT '',
+    ad_login       text NOT NULL DEFAULT '',
+    groups         text[] NOT NULL DEFAULT '{{}}',
+    active         boolean NOT NULL DEFAULT true,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    last_login     timestamptz
+);
+
+-- Clés d'API : seule l'empreinte SHA-256 de la partie secrète est gardée
+CREATE TABLE IF NOT EXISTS api_keys (
+    id          bigserial PRIMARY KEY,
+    user_id     bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    name        text NOT NULL,
+    prefix      text NOT NULL UNIQUE,
+    key_hash    text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    expires_at  timestamptz,
+    last_used   timestamptz,
+    revoked_at  timestamptz
+);
+CREATE INDEX IF NOT EXISTS api_keys_user_idx ON api_keys (user_id);
 """
 
 HYBRID_SEARCH = """
@@ -275,11 +331,23 @@ _META_COLS = ("d.doc_type, d.doc_label, d.doc_fields, d.fields_to_check, d.doc_c
               "d.light_uuid, d.light_status")
 
 
+def _nul(value):
+    """PostgreSQL refuse le caractère NUL (0x00) dans text et jsonb ; certains PDF et OCR en
+    contiennent (texte mal encodé, champs binaires). Retiré partout, récursivement."""
+    if isinstance(value, str):
+        return value.replace("\x00", "") if "\x00" in value else value
+    if isinstance(value, dict):
+        return {_nul(k): _nul(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_nul(v) for v in value)
+    return value
+
+
 def _meta_params(meta: DocMeta | None) -> tuple:
     if meta is None:
         return (None, None, None, [], None, None, None)
-    return (meta.doc_type, meta.label, json.dumps(meta.fields, ensure_ascii=False, default=str),
-            list(meta.to_check), meta.confidence, meta.light_uuid, meta.light_status)
+    return (_nul(meta.doc_type), _nul(meta.label), json.dumps(_nul(meta.fields), ensure_ascii=False, default=str),
+            _nul(list(meta.to_check)), meta.confidence, meta.light_uuid, _nul(meta.light_status))
 
 
 def _meta_from(r) -> DocMeta | None:
@@ -370,7 +438,11 @@ class PgStore:
             self._pool = None
 
     def init(self) -> None:
+        # Plusieurs instances démarrent ensemble (Swarm : api ×2, worker) : sans verrou, deux
+        # CREATE EXTENSION / CREATE TABLE IF NOT EXISTS simultanés se heurtent (UniqueViolation).
+        # Verrou de transaction : les suivantes attendent, puis trouvent le schéma déjà créé.
         with self._conn() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('alambic-search:schema', 0))")
             conn.execute(SCHEMA.format(dim=int(self.dim)))
 
     def get_state(self, source: str) -> dict[str, DocState]:
@@ -412,8 +484,8 @@ class PgStore:
                     doc_confidence = EXCLUDED.doc_confidence, light_uuid = EXCLUDED.light_uuid,
                     light_status = EXCLUDED.light_status, indexed_at = now()
                 """,
-                (ref.source, ref.doc_id, ref.path, ref.mtime, ref.size, content_hash,
-                 sorted(acl.allow), sorted(acl.deny), status, error, *_meta_params(meta)),
+                (ref.source, ref.doc_id, _nul(ref.path), ref.mtime, ref.size, content_hash,
+                 sorted(acl.allow), sorted(acl.deny), status, _nul(error), *_meta_params(meta)),
             )
             conn.execute("DELETE FROM chunks WHERE source = %s AND doc_id = %s", (ref.source, ref.doc_id))
             if chunks:
@@ -422,7 +494,7 @@ class PgStore:
                         "INSERT INTO chunks (source, doc_id, chunk_no, page, text, embedding) "
                         "VALUES (%s, %s, %s, %s, %s, %s::vector)",
                         [
-                            (ref.source, ref.doc_id, c.chunk_no, c.page, c.text, _vec_literal(v))
+                            (ref.source, ref.doc_id, c.chunk_no, c.page, _nul(c.text), _vec_literal(v))
                             for c, v in zip(chunks, vectors, strict=True)
                         ],
                     )
@@ -477,7 +549,7 @@ class PgStore:
                 conn.execute(
                     "INSERT INTO chunks (source, doc_id, chunk_no, page, text, embedding) "
                     "VALUES (%s, %s, %s, 1, %s, %s::vector)",
-                    (source, doc_id, FICHE_CHUNK_NO, fiche, _vec_literal(vector)),
+                    (source, doc_id, FICHE_CHUNK_NO, _nul(fiche), _vec_literal(vector)),
                 )
 
     def strip_light(self, source):
@@ -646,6 +718,95 @@ class PgStore:
                 "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
                 (key, json.dumps(value, ensure_ascii=False)),
             )
+
+    # --- Comptes et clés d'API ---------------------------------------------------------
+
+    _USER_COLS = ("id, login, name, role, password_hash, ad_login, groups, active, "
+                  "extract(epoch FROM created_at), extract(epoch FROM last_login)")
+
+    @staticmethod
+    def _user(r) -> User:
+        return User(r[0], r[1], r[2], r[3], r[4], r[5], list(r[6]), r[7], float(r[8]),
+                    float(r[9]) if r[9] is not None else None)
+
+    def list_users(self):
+        with self._conn() as conn:
+            rows = conn.execute(f"SELECT {self._USER_COLS} FROM users ORDER BY login").fetchall()
+        return [self._user(r) for r in rows]
+
+    def get_user(self, login):
+        with self._conn() as conn:
+            r = conn.execute(f"SELECT {self._USER_COLS} FROM users WHERE lower(login) = lower(%s)",
+                             (login,)).fetchone()
+        return self._user(r) if r else None
+
+    def get_user_by_id(self, user_id):
+        with self._conn() as conn:
+            r = conn.execute(f"SELECT {self._USER_COLS} FROM users WHERE id = %s", (user_id,)).fetchone()
+        return self._user(r) if r else None
+
+    def create_user(self, user):
+        with self._conn() as conn:
+            return conn.execute(
+                "INSERT INTO users (login, name, role, password_hash, ad_login, groups, active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (user.login, user.name, user.role, user.password_hash, user.ad_login, list(user.groups), user.active),
+            ).fetchone()[0]
+
+    def update_user(self, user):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE users SET login = %s, name = %s, role = %s, password_hash = %s, ad_login = %s, groups = %s, "
+                "active = %s WHERE id = %s",
+                (user.login, user.name, user.role, user.password_hash, user.ad_login, list(user.groups), user.active,
+                 user.id),
+            )
+
+    def delete_user(self, user_id):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+
+    def touch_login(self, user_id):
+        with self._conn() as conn:
+            conn.execute("UPDATE users SET last_login = now() WHERE id = %s", (user_id,))
+
+    _KEY_COLS = ("id, user_id, name, prefix, key_hash, extract(epoch FROM created_at), extract(epoch FROM expires_at), "
+                 "extract(epoch FROM last_used), extract(epoch FROM revoked_at)")
+
+    @staticmethod
+    def _key(r) -> ApiKey:
+        f = [float(x) if x is not None else None for x in r[5:]]
+        return ApiKey(r[0], r[1], r[2], r[3], r[4], f[0] or 0.0, f[1], f[2], f[3])
+
+    def create_api_key(self, key):
+        with self._conn() as conn:
+            return conn.execute(
+                "INSERT INTO api_keys (user_id, name, prefix, key_hash, expires_at) "
+                "VALUES (%s, %s, %s, %s, to_timestamp(%s)) RETURNING id",
+                (key.user_id, key.name, key.prefix, key.key_hash, key.expires_at),
+            ).fetchone()[0]
+
+    def list_api_keys(self, user_id=None):
+        sql, params = f"SELECT {self._KEY_COLS} FROM api_keys", []
+        if user_id is not None:
+            sql += " WHERE user_id = %s"
+            params.append(user_id)
+        with self._conn() as conn:
+            rows = conn.execute(sql + " ORDER BY created_at DESC, id DESC", params).fetchall()
+        return [self._key(r) for r in rows]
+
+    def get_api_key(self, prefix):
+        with self._conn() as conn:
+            r = conn.execute(f"SELECT {self._KEY_COLS} FROM api_keys WHERE prefix = %s", (prefix,)).fetchone()
+        return self._key(r) if r else None
+
+    def revoke_api_key(self, key_id):
+        with self._conn() as conn:
+            conn.execute("UPDATE api_keys SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL", (key_id,))
+
+    def touch_api_key(self, key_id):
+        with self._conn() as conn:
+            conn.execute("UPDATE api_keys SET last_used = now() WHERE id = %s", (key_id,))
 
     def purge_source(self, name):
         """Retire de l'index tout ce qui vient de la source (les fichiers ne sont pas touchés)."""
@@ -862,6 +1023,8 @@ class MemoryStore:
         self.source_secrets: dict[tuple[str, str], str] = {}
         self._sync_locks: dict[str, threading.Lock] = {}
         self.settings: dict = {}
+        self.users: dict[int, User] = {}
+        self.api_keys: dict[int, ApiKey] = {}
         self._lock = threading.Lock()  # les synchros tournent dans des threads
 
     def init(self) -> None:
@@ -1042,6 +1205,65 @@ class MemoryStore:
 
     def set_setting(self, key, value):
         self.settings[key] = value
+
+    # --- Comptes et clés d'API ---------------------------------------------------------
+
+    def list_users(self):
+        return sorted((dataclasses.replace(u, groups=list(u.groups)) for u in self.users.values()),
+                      key=lambda u: u.login.lower())
+
+    def get_user(self, login):
+        u = next((u for u in self.users.values() if u.login.lower() == login.lower()), None)
+        return dataclasses.replace(u, groups=list(u.groups)) if u else None
+
+    def get_user_by_id(self, user_id):
+        u = self.users.get(user_id)
+        return dataclasses.replace(u, groups=list(u.groups)) if u else None
+
+    def create_user(self, user):
+        if self.get_user(user.login) is not None:
+            raise ValueError(f"Identifiant déjà pris : {user.login}")
+        uid = max(self.users, default=0) + 1
+        self.users[uid] = dataclasses.replace(user, id=uid, groups=list(user.groups), created_at=time.time())
+        return uid
+
+    def update_user(self, user):
+        other = self.get_user(user.login)
+        if other is not None and other.id != user.id:
+            raise ValueError(f"Identifiant déjà pris : {user.login}")
+        old = self.users[user.id]
+        self.users[user.id] = dataclasses.replace(user, groups=list(user.groups), created_at=old.created_at,
+                                                  last_login=old.last_login)
+
+    def delete_user(self, user_id):
+        self.users.pop(user_id, None)
+        self.api_keys = {k: v for k, v in self.api_keys.items() if v.user_id != user_id}
+
+    def touch_login(self, user_id):
+        if user_id in self.users:
+            self.users[user_id].last_login = time.time()
+
+    def create_api_key(self, key):
+        kid = max(self.api_keys, default=0) + 1
+        self.api_keys[kid] = dataclasses.replace(key, id=kid, created_at=time.time())
+        return kid
+
+    def list_api_keys(self, user_id=None):
+        keys = [dataclasses.replace(k) for k in self.api_keys.values() if user_id is None or k.user_id == user_id]
+        return sorted(keys, key=lambda k: (-k.created_at, -k.id))
+
+    def get_api_key(self, prefix):
+        k = next((k for k in self.api_keys.values() if k.prefix == prefix), None)
+        return dataclasses.replace(k) if k else None
+
+    def revoke_api_key(self, key_id):
+        k = self.api_keys.get(key_id)
+        if k is not None and k.revoked_at is None:
+            k.revoked_at = time.time()
+
+    def touch_api_key(self, key_id):
+        if key_id in self.api_keys:
+            self.api_keys[key_id].last_used = time.time()
 
     def purge_source(self, name):
         keys = [k for k in self.docs if k[0] == name]

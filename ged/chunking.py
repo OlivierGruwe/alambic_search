@@ -15,7 +15,8 @@ def chunk_pages(pages: list[Page], max_chars: int = 1200, overlap: int = 200) ->
     out: list[Chunk] = []
     for page in pages:
         buf = ""
-        for para in (p.strip() for p in _PARAGRAPH_SPLIT.split(page.text)):
+        # NUL (0x00) : présent dans certains PDF ou OCR, refusé par PostgreSQL, sans valeur pour la recherche
+        for para in (p.strip() for p in _PARAGRAPH_SPLIT.split(page.text.replace("\x00", ""))):
             if not para:
                 continue
             if len(para) > max_chars:
