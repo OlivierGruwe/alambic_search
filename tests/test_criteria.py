@@ -132,6 +132,17 @@ def test_list_question_uses_criteria_not_ranking(indexed, store, embedder):
     assert len(llm.prompts) == 1  # pas de génération ensuite
 
 
+def test_list_question_without_writing_still_uses_criteria(indexed, store, embedder):
+    """Sans rédaction, une question de liste rend la même liste exacte (pas des passages)."""
+    from ged.answer import ask
+
+    llm = RouterLLM('{"liste": true, "type": "FACTURE", "champ": null, "valeur": "GRUWE"}')
+    answer = ask("Donne-moi toutes les factures de M. GRUWE", frozenset({"compta"}), store, embedder, llm,
+                 generate=False)
+    assert answer.criteria is not None
+    assert [c.path.rsplit("/", 1)[-1] for c in answer.citations] == ["facture-001.pdf", "facture-002.pdf"]
+
+
 @pytest.mark.parametrize("route", [
     '{"liste": false}',                                                   # pas une liste
     '{"liste": true, "type": "FACTURE", "valeur": "DUPONT"}',             # valeur absente de la question

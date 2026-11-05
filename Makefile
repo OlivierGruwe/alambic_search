@@ -5,6 +5,10 @@
 # Réglages locaux (.env) : modèles, mot de passe de la console…
 -include .env
 
+# Git Bash (Windows) : ne pas convertir les chemins Linux passés à docker
+# (/run/desktop/mnt/host/d/… deviendrait C:/Program Files/Git/run/…)
+export MSYS_NO_PATHCONV := 1
+
 PORT ?= 8002
 EMBED_MODEL ?= bge-m3
 LLM_MODEL ?= qwen2.5:7b

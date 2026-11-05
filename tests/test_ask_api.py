@@ -271,3 +271,19 @@ def test_thumbnail_of_scanned_pdf(store, embedder, tmp_path):
     make_scan(tmp_path / "scan.pdf")
     image = render((tmp_path / "scan.pdf").read_bytes(), "scan.pdf", 1, 160)
     assert image[:4] == b"RIFF"  # WebP
+
+
+def test_api_documentation_lists_every_route(connector, store, embedder):
+    """docs/api.md documente toutes les routes publiques de l'API, et rien qui n'existe pas."""
+    import re
+    from pathlib import Path
+
+    from ged.api import create_app
+
+    app = create_app(store, embedder, None, {connector.name: connector})
+    spec = app.openapi()["paths"]
+    real = {(m.upper(), re.sub(r"\{(\w+)(:path)?\}", r"{\1}", p)) for p, ops in spec.items() for m in ops}
+    real = {(m, p.replace("{name}", "{nom}")) for m, p in real}
+    doc = Path(__file__).parents[1].joinpath("docs/api.md").read_text(encoding="utf-8")
+    documented = set(re.findall(r"\| `(GET|POST)` \| `(/[^`]*)` \|", doc))
+    assert documented == real, (documented ^ real)

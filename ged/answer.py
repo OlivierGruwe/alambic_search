@@ -3,6 +3,7 @@
 La formulation par le LLM est optionnelle : sans LLM configuré, ou si la question le demande
 (`generate=False`), la réponse est la liste des extraits les plus pertinents, chacun cité.
 Pas de modèle à héberger, pas de reformulation à vérifier, réponse en quelques dizaines de ms.
+Une question de liste passe quand même par la traduction en critères si un LLM est configuré.
 
 Question de liste (« toutes les factures de M. GRUWE ») : le LLM la traduit en critères
 (type, champ, valeur), contrôlés, puis la liste vient de la recherche par critères (SQL,
@@ -204,7 +205,9 @@ def ask(
 
 def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, url_for, per_document,
             reranker) -> Answer:
-    if generate and llm is not None:
+    # Question de liste (« les factures de Dupont ») : recherche exacte par critères, rédaction ou
+    # non — sans quoi on ne rendrait que des passages ressemblants, moins précis.
+    if llm is not None:
         criteria = translate(question, store, llm)
         if criteria is not None:
             return list_answer(question, groups, store, criteria)

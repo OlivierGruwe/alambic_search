@@ -369,6 +369,8 @@ d'exploitation ».
 
 ## API
 
+Documentation complète (authentification, routes, paramètres, réponses, erreurs, exemples) : **[docs/api.md](docs/api.md)**.
+
 Collection Postman prête à importer : `docs/postman/alambic-search.postman_collection.json`
 (questions, recherche, listes par critères, ouverture du document cité, vignette, synchro).
 Schéma complet : `/openapi.json` (importable aussi dans Postman), documentation interactive : `/docs`.

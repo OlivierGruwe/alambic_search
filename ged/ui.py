@@ -187,7 +187,9 @@ def build_router(
             if urlsplit(origin).netloc != request.headers.get("host", ""):
                 raise HTTPException(403, "Requête refusée : elle ne vient pas de la console.")
 
-    router = APIRouter(prefix="/admin", dependencies=[Depends(require_console), Depends(same_origin)])
+    # pages HTML de la console : hors du schéma OpenAPI (qui ne décrit que l'API)
+    router = APIRouter(prefix="/admin", include_in_schema=False,
+                       dependencies=[Depends(require_console), Depends(same_origin)])
 
     def page(request: Request, name: str, nav: str, **ctx) -> HTMLResponse:
         me = auth.user(request)
