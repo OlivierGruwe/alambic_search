@@ -99,12 +99,20 @@ def _dirname(path: str) -> str:
 
 
 def _cites(text: str, cited: set[int]):
-    """Remplace les références [n] de la réponse par des pastilles (texte échappé d'abord)."""
+    """Réponse du LLM en HTML sûr : texte échappé d'abord, puis gras (**…**), puces et
+    références [n] en pastilles. Une dernière ligne faite seulement de références (« [1], [3] »,
+    ajoutée par certains modèles) est retirée : les sources sont listées dessous."""
     import re
 
     from markupsafe import Markup, escape
 
-    return Markup(re.sub(r"\[(\d+)\]", lambda m: f'<span class="cite">{m.group(1)}</span>', str(escape(text))))
+    lines = str(text).rstrip().splitlines()
+    while lines and re.fullmatch(r"[\s,;.\-–]*(\[\d+\][\s,;.et\-–]*)+", lines[-1]):
+        lines.pop()
+    html = str(escape("\n".join(lines).strip()))
+    html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html)
+    html = re.sub(r"(?m)^\s*[-*•]\s+", "• ", html)
+    return Markup(re.sub(r"\[(\d+)\]", lambda m: f'<span class="cite">{m.group(1)}</span>', html))
 
 
 templates.env.filters.update(when=_when, size=_size, num=_num, basename=_basename, dirname=_dirname, cites=_cites)
