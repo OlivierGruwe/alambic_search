@@ -5,8 +5,8 @@
 {% set r = answer.criteria %}
 <section class="section" aria-labelledby="ans-title">
   <h2 id="ans-title">Réponse</h2>
-  <div class="answer">{{ answer.text }}</div>
-  <p class="hint" style="margin-top: 8px">Question comprise comme une liste par critères :
+  <div class="answer">{% if answer.generated %}{{ answer.text|cites(answer.citations|map(attribute='n')|list) }}{% else %}{{ answer.text }}{% endif %}</div>
+  <p class="hint" style="margin-top: 8px">Question comprise comme une liste par critères{% if answer.generated %}, réponse rédigée à partir des fiches de tous ses documents (numérotés comme la liste){% endif %} :
     {% if r.doc_type %}type <b>{{ r.doc_type }}</b>, {% endif %}{% if r.field %}champ <b>{{ r.field }}</b>, {% endif %}valeur <b>« {{ r.value }} »</b>.
     La liste vient des données extraites, pas du modèle. {{ ms|num }} ms.</p>
 </section>

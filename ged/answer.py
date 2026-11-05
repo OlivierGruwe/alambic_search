@@ -64,8 +64,10 @@ LIST_QUESTION = re.compile(
 ROUTER_PROMPT = """Tu traduis une question en critères de recherche sur des documents typés.
 Réponds UNIQUEMENT par un objet JSON, sans texte autour :
 {"liste": true|false, "type": "CODE"|null, "champ": "nom"|null, "valeur": "texte"|null}
-- liste : true si la question demande une liste ou un nombre de documents correspondant à une
-  personne, une société, un numéro… ; false sinon (question sur le contenu d'un document).
+- liste : true si la question porte sur TOUS les documents d'une personne, d'une société, d'un
+  numéro… : leur liste, leur nombre, ou une information à relever dans chacun (« tous les
+  prénoms de Dupont », « les montants des factures Durand ») ; false sinon (question sur le
+  contenu d'un document précis ou sur un sujet).
 - type : un code parmi ceux fournis, ou null si la question ne précise pas de type.
 - champ : un nom parmi ceux fournis pour ce type, seulement si la question le désigne
   clairement (ex. « dont le fournisseur est… ») ; sinon null.
@@ -255,9 +257,15 @@ def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, u
         criteria = translate(question, store, llm)
         if criteria is not None:
             listed = list_answer(question, groups, store, criteria)
+            if not listed.criteria.documents and criteria["champ"]:
+                # « tous les prénoms de Gruwe » : le LLM a pris le champ demandé (prénom) pour
+                # celui qui contient la valeur ; on cherche la valeur dans tous les champs.
+                listed = list_answer(question, groups, store, {**criteria, "champ": None})
             # Aucune donnée extraite ne correspond (question thématique : « les documents sur la
             # sécurité ») : ce n'était pas une liste par critères, recherche ordinaire.
             if listed.criteria.documents:
+                if generate:  # réponse rédigée à partir des fiches de TOUS les documents de la liste
+                    summarize_list(question, store, llm, listed)
                 return listed
             log.info("Question de liste sans document par critères, recherche ordinaire : %r", question[:120])
 
@@ -352,6 +360,40 @@ def translate(question: str, store: Store, llm: LLM) -> dict | None:
     doc_type = data.get("type") if data.get("type") in fields else None
     field = data.get("champ") if doc_type and data.get("champ") in fields[doc_type] else None
     return {"type": doc_type, "champ": field, "valeur": value}
+
+
+LIST_PROMPT = """Tu es l'assistant documentaire de l'entreprise.
+On te donne la fiche (type et données extraites) de CHAQUE document correspondant à la recherche :
+la liste est complète. Réponds à la question à partir de toutes ces fiches.
+- Cite chaque document utilisé entre crochets, une référence par crochet : [1], [2]...
+- Regroupe les valeurs identiques (même prénom, même montant) en citant tous leurs documents.
+- Une valeur marquée « (à vérifier) » n'est pas sûre : dis-le.
+- Si les fiches ne permettent pas de répondre, dis-le, sans inventer.
+- Réponds en français, de façon concise."""
+
+LIST_SUMMARY_DOCS = 40  # fiches envoyées au LLM au plus (liste plus longue : précisez)
+
+
+def summarize_list(question: str, store: Store, llm: LLM, answer: Answer) -> None:
+    """Rédige la réponse d'une question de liste à partir des fiches de ses documents (toute la
+    liste, pas les 8 passages les plus ressemblants) : « tous les prénoms de Gruwe »."""
+    docs = answer.criteria.documents[:LIST_SUMMARY_DOCS]
+    parts = []
+    for i, m in enumerate(docs, 1):
+        chunks = store.document_chunks(m.source, m.doc_id, limit=1)
+        fiche = chunks[0].text[:1500] if chunks else ""
+        if not fiche:
+            fiche = "\n".join(f"{k} : {v}" for k, v, _ in m.fields)
+        parts.append(f"[{i}] {m.path}\n{fiche}")
+    try:
+        text = split_cites(llm.complete(LIST_PROMPT, "Fiches :\n\n" + "\n\n".join(parts) + f"\n\nQuestion : {question}"))
+    except Exception as exc:  # LLM injoignable : la liste reste, sans rédaction
+        log.warning("Rédaction de la liste impossible : %s", exc)
+        return
+    if len(answer.criteria.documents) > len(docs):
+        text += f"\n\n(D'après les {len(docs)} premiers documents sur {len(answer.criteria.documents)} : précisez la question.)"
+    answer.text = text
+    answer.generated = True
 
 
 def list_answer(question: str, groups: frozenset[str], store: Store, criteria: dict) -> Answer:

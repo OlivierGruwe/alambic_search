@@ -2,6 +2,13 @@
 {% if error %}
 <div class="error-box" role="alert">{{ error }}</div>
 {% elif r %}
+{% if answer and answer.generated %}
+<section class="section" aria-labelledby="ans-title">
+  <h2 id="ans-title">Réponse</h2>
+  <div class="answer">{{ answer.text|cites(answer.citations|map(attribute='n')|list) }}</div>
+  <p class="hint">Rédigée à partir des données de tous les documents de la liste ci-dessous (numéros = rang dans la liste).</p>
+</section>
+{% endif %}
 <section class="section" aria-labelledby="res-title">
   <h2 id="res-title">{{ r.documents|length|num }} document{{ 's' if r.documents|length > 1 }}{% if r.doc_type %} ({{ (r.documents[0].label if r.documents else r.doc_type)|lower }}){% endif %} pour « {{ r.value }} »</h2>
   {% if answer %}<p class="hint">Question comprise comme une liste{% if r.doc_type %} de type {{ r.doc_type }}{% endif %} pour « {{ r.value }} ».</p>{% endif %}
@@ -10,7 +17,7 @@
   <ul class="doc-list">
     {% for m in r.documents %}
     {% set href = "/documents/" ~ m.source ~ "/" ~ (m.doc_id|urlencode) %}
-    <li class="with-thumb">{{ thumb(thumb_url(m.source, m.doc_id, m.path, 1), href) }}<div>
+    <li class="with-thumb">{{ thumb(thumb_url(m.source, m.doc_id, m.path, 1), href) }}<div>{% if answer and answer.generated %}<span class="cite">{{ loop.index }}</span>{% endif %}
       <a class="fname" href="{{ href }}" target="_blank" rel="noopener">{{ m.path|basename }}</a>
       <span class="sub path">{{ m.path|dirname }}</span>
       <div class="match-fields">{% for k, v, check in m.fields %}<span>{{ k|field_name }} : <mark>{{ v|truncate(120) }}</mark>{% if check %} <span class="status warn" title="Valeur lue automatiquement, pas encore confirmée">à vérifier</span>{% endif %}</span>{% endfor %}</div></div></li>

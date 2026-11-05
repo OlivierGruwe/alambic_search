@@ -124,12 +124,36 @@ def test_list_question_uses_criteria_not_ranking(indexed, store, embedder):
     from ged.answer import ask
 
     llm = RouterLLM('Voici : {"liste": true, "type": "FACTURE", "champ": null, "valeur": "GRUWE"}')
-    answer = ask("Donne-moi toutes les factures de M. GRUWE", frozenset({"compta"}), store, embedder, llm)
+    answer = ask("Donne-moi toutes les factures de M. GRUWE", frozenset({"compta"}), store, embedder, llm,
+                 generate=False)
     assert answer.criteria is not None and not answer.generated
     assert [c.path.rsplit("/", 1)[-1] for c in answer.citations] == ["facture-001.pdf", "facture-002.pdf"]
     assert answer.text.startswith("2 factures dont un champ contient « GRUWE »") and "Dont 1 à vérifier" in answer.text
     assert "FACTURE (Facture) : champs client, montantTTC" in llm.prompts[0]
-    assert len(llm.prompts) == 1  # pas de génération ensuite
+    assert len(llm.prompts) == 1  # sans rédaction : la liste seule
+
+
+def test_list_question_written_from_all_fiches(indexed, store, embedder):
+    """« Tous les … de Gruwe » avec rédaction : le LLM lit les fiches de TOUS les documents de
+    la liste (pas 8 passages), et ses références [n] désignent le rang dans la liste."""
+    from ged.answer import ask
+
+    llm = RouterLLM('{"liste": true, "type": "FACTURE", "champ": null, "valeur": "GRUWE"}', reply="Montants : 100 [1, 2].")
+    answer = ask("Donne-moi toutes les factures de M. GRUWE", frozenset({"compta"}), store, embedder, llm)
+    assert answer.criteria is not None and answer.generated
+    assert answer.text == "Montants : 100 [1], [2]."
+    fiches = llm.prompts[1]
+    assert "[1] " in fiches and "[2] " in fiches and "facture-001.pdf" in fiches and "facture-002.pdf" in fiches
+
+
+def test_list_question_retries_without_field(indexed, store, embedder):
+    """« tous les prénoms de Gruwe » : champ demandé ≠ champ qui contient la valeur."""
+    from ged.answer import ask
+
+    llm = RouterLLM('{"liste": true, "type": "FACTURE", "champ": "montantTTC", "valeur": "GRUWE"}')
+    answer = ask("Donne-moi toutes les factures de M. GRUWE", frozenset({"compta"}), store, embedder, llm,
+                 generate=False)
+    assert answer.criteria is not None and answer.criteria.field is None and len(answer.criteria.documents) == 2
 
 
 def test_list_question_without_writing_still_uses_criteria(indexed, store, embedder):
