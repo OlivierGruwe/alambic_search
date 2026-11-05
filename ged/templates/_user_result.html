@@ -72,7 +72,7 @@
     {% endfor %}
   </ol>
   {% endif %}
-  {% if ms is defined %}<p class="hint timing">Réponse en {{ ms|num }} ms{% if answer.llm_ms %}, dont {{ answer.llm_ms|num }} ms de {{ "rédaction" if answer.generated else "LLM" }}{% endif %}.</p>{% endif %}
+  {% if ms is defined %}<p class="hint timing">Réponse en {{ ms|num }} ms{% if answer.llm_ms %}, dont {{ answer.llm_ms|num }} ms de {{ "rédaction" if answer.generated else "LLM" }}{% if llm_name %} ({{ llm_name }}){% endif %}{% endif %}.</p>{% endif %}
   {% if historique and has_llm %}
   <div class="conv-actions">
     <span class="hint">Vous pouvez poser une question de suite (« et pour Durand ? », « quel montant ? »).</span>

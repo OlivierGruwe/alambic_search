@@ -49,7 +49,7 @@
     <div class="field wide" data-for="question">
       <label class="check-label"><input type="checkbox" name="formuler" value="true" {% if has_llm %}checked{% else %}disabled{% endif %}>
         Formuler une réponse avec le LLM</label>
-      <p class="hint">{% if has_llm %}Décoché : les extraits les plus pertinents sont rendus tels quels, sans reformulation (plus rapide).{% else %}Aucun LLM configuré (LLM_MODEL vide) : la réponse est la liste des extraits pertinents.{% endif %}</p></div>
+      <p class="hint">{% if has_llm %}Modèle : {{ llm_name }}. Décoché : les extraits les plus pertinents sont rendus tels quels, sans reformulation (plus rapide).{% else %}Aucun LLM configuré (LLM_MODEL vide) : la réponse est la liste des extraits pertinents.{% endif %}</p></div>
     {% if reranker %}
     <div class="field wide" data-for="question">
       <label class="check-label"><input type="checkbox" name="reclasser" value="true" checked> Reclasser les résultats</label>

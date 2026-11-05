@@ -144,6 +144,7 @@ def build_router(
     templates.env.globals["pname"] = pname
     templates.env.globals["has_identity"] = identity is not None
     templates.env.globals["has_llm"] = llm is not None
+    templates.env.globals["llm_name"] = llm.describe() if llm is not None and hasattr(llm, "describe") else None
     templates.env.globals["reranker"] = reranker.describe() if reranker is not None else None
     templates.env.globals["converter_url"] = converter.url if converter is not None else None
     templates.env.globals["light"] = analyzer.describe() if analyzer is not None else None
