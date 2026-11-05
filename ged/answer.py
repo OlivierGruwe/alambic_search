@@ -23,7 +23,7 @@ log = logging.getLogger("alambic_search.answer")
 SYSTEM_PROMPT = """Tu es l'assistant documentaire de l'entreprise.
 Règles :
 - Réponds UNIQUEMENT à partir des extraits fournis, jamais de connaissances extérieures.
-- Après chaque affirmation, cite la ou les sources entre crochets : [1], [2]...
+- Après chaque affirmation, cite la ou les sources entre crochets, une par crochet : [1], [2]... (jamais [1, 2]).
 - Si les extraits ne permettent pas de répondre, dis-le clairement, sans inventer.
 - Si deux extraits se contredisent, signale-le en citant les deux.
 - Une « Fiche Alambic » résume le type et les données d'un document ; une valeur marquée
@@ -35,6 +35,23 @@ EXTRACTS = "Extraits les plus pertinents des documents accessibles, sans reformu
 EXTRACTS_BY_DOC = "Documents les plus pertinents parmi ceux accessibles, sans reformulation."
 
 _CITE = re.compile(r"\[(\d+)\]")
+# Références groupées écrites par certains modèles : [3, 4, 5], [3,4], [3-5], [3 et 4]
+_CITE_GROUP = re.compile(r"\[(\d+(?:\s*(?:,|;|-|–|et)\s*\d+)+)\]")
+
+
+def split_cites(text: str) -> str:
+    """« [3, 4, 5] » ou « [3-5] » → « [3], [4], [5] » : chaque source est reconnue et listée."""
+    def expand(m: re.Match) -> str:
+        nums: list[int] = []
+        for part in re.split(r"\s*(?:,|;|et)\s*", m.group(1)):
+            a, _, b = re.sub(r"\s", "", part).replace("–", "-").partition("-")
+            if b and a.isdigit() and b.isdigit() and 0 < int(b) - int(a) < 30:
+                nums += range(int(a), int(b) + 1)
+            elif a.isdigit():
+                nums.append(int(a))
+        return ", ".join(f"[{n}]" for n in nums)
+
+    return _CITE_GROUP.sub(expand, text)
 
 # Questions qui demandent une liste : seules celles-ci passent par la traduction en critères
 # (un appel LLM de plus) ; les autres vont directement à la recherche par ressemblance.
@@ -200,8 +217,10 @@ def ask(
     llm = _Timed(llm) if llm is not None else None
     if history:
         question = standalone_question(question, history, llm)
+    steps: dict[str, int] = {}
     answer = _answer(question, groups, store, embedder, llm, k=k, generate=generate, doc_types=doc_types,
-                     url_for=url_for, per_document=per_document, reranker=reranker)
+                     url_for=url_for, per_document=per_document, reranker=reranker, steps=steps)
+    answer.steps = steps
     if question != asked:
         answer.reformulated = question
     answer.llm_ms = int(llm.ms) if llm is not None else 0
@@ -229,7 +248,7 @@ class _Timed:
 
 
 def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, url_for, per_document,
-            reranker) -> Answer:
+            reranker, steps=None) -> Answer:
     # Question de liste (« les factures de Dupont ») : recherche exacte par critères, rédaction ou
     # non — sans quoi on ne rendrait que des passages ressemblants, moins précis.
     if llm is not None:
@@ -242,7 +261,12 @@ def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, u
                 return listed
             log.info("Question de liste sans document par critères, recherche ordinaire : %r", question[:120])
 
+    from time import perf_counter
+
+    steps = {} if steps is None else steps
+    t = perf_counter()
     vector = embedder.embed([question])[0]
+    steps["vecteur"] = int((perf_counter() - t) * 1000)
     # Identifiant dans la question (n° de permis, de facture…) : seuls les documents qui le
     # contiennent tel quel comptent ; la ressemblance n'en ajoute pas d'autres.
     idents, absent = identifiers(question), ()
@@ -251,9 +275,13 @@ def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, u
     wide = k * 4 if (per_document or exact) else k
     if reranker is not None:  # assez de candidats pour que le reclassement ait du choix
         wide = max(wide, reranker.candidates)
+    t = perf_counter()
     hits = dedupe(store.search(question, vector, groups, k=wide, doc_types=doc_types or None))
+    steps["recherche"] = int((perf_counter() - t) * 1000)
     if reranker is not None:
+        t = perf_counter()
         hits = reranker.rerank(question, hits)
+        steps["reclassement"] = int((perf_counter() - t) * 1000)
     if exact:
         hits = [h for h in hits if (h.source, h.doc_id) in exact]
         seen = {(h.source, h.doc_id) for h in hits}
@@ -276,7 +304,7 @@ def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, u
 
         if llm is None or not generate:
             return Answer(EXTRACTS_BY_DOC, [cite_doc(d.n) for d in docs], kept, generated=False, documents=docs, identifiers=idents, identifiers_absent=absent)
-        text = llm.complete(SYSTEM_PROMPT, f"Documents :\n\n{build_document_context(docs)}\n\nQuestion : {question}")
+        text = split_cites(llm.complete(SYSTEM_PROMPT, f"Documents :\n\n{build_document_context(docs)}\n\nQuestion : {question}"))
         cited = sorted({int(n) for n in _CITE.findall(text) if 1 <= int(n) <= len(docs)})
         return Answer(text, [cite_doc(n) for n in cited], kept, documents=docs, identifiers=idents, identifiers_absent=absent)
 
@@ -287,7 +315,7 @@ def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, u
     if llm is None or not generate:
         return Answer(EXTRACTS, [cite(n) for n in range(1, len(hits) + 1)], hits, generated=False, identifiers=idents, identifiers_absent=absent)
 
-    text = llm.complete(SYSTEM_PROMPT, f"Extraits :\n\n{build_context(hits)}\n\nQuestion : {question}")
+    text = split_cites(llm.complete(SYSTEM_PROMPT, f"Extraits :\n\n{build_context(hits)}\n\nQuestion : {question}"))
 
     cited = sorted({int(n) for n in _CITE.findall(text) if 1 <= int(n) <= len(hits)})
     return Answer(text, [cite(n) for n in cited], hits, identifiers=idents, identifiers_absent=absent)

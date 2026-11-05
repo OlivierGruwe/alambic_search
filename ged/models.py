@@ -127,6 +127,7 @@ class Answer:
     identifiers_absent: tuple[str, ...] = ()  # identifiants trouvés dans aucun document : résultats par ressemblance
     reformulated: str | None = None  # question de suivi rendue autonome (conversation)
     llm_ms: int = 0  # temps passé à attendre le LLM (rédaction, traduction en critères, suivi)
+    steps: dict = field(default_factory=dict)  # durées (ms) : vecteur, recherche, reclassement
 
 
 @dataclass(frozen=True)

@@ -311,6 +311,7 @@ def create_app(
             "formulee": answer.generated,
             "duree_ms": ms,  # temps total de la réponse
             "duree_llm_ms": answer.llm_ms,  # dont attente du LLM (rédaction, critères, suivi)
+            "etapes_ms": answer.steps,  # vecteur, recherche, reclassement
             # question de suivi rendue autonome (null si la question se suffisait)
             "question_comprise": answer.reformulated,
             # identifiants de la question (n° de permis, de facture…) : seuls les documents qui les contiennent

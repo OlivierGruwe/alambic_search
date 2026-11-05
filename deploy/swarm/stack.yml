@@ -29,7 +29,9 @@ x-search-env: &search-env
   LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
   LLM_API_KEY_FILE: /run/secrets/search_llm_api_key
   CONVERT_URL: http://gotenberg:3000
-  RERANK_URL: ${RERANK_URL:-http://rerank:80}
+  # vide (RERANK_URL=) : reclassement désactivé — « - » et non « :- », sinon le vide reprendrait le défaut
+  RERANK_URL: ${RERANK_URL-http://rerank:80}
+  RERANK_CANDIDATES: ${RERANK_CANDIDATES:-40}
   CLIENT_NAME: ${CLIENT_NAME:-}
 
 x-search-secrets: &search-secrets

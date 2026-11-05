@@ -48,7 +48,7 @@
   {% else %}
   <div class="answer">{{ answer.text }}</div>
   {% endif %}
-  {% if ms is defined %}<p class="hint timing">Réponse en {{ ms|num }} ms{% if answer.llm_ms %}, dont {{ answer.llm_ms|num }} ms de {{ "rédaction" if answer.generated else "LLM" }}{% if llm_name %} ({{ llm_name }}){% endif %}{% endif %}.</p>{% endif %}
+  {% if ms is defined %}<p class="hint timing">Réponse en {{ ms|num }} ms{% if answer.llm_ms %}, dont {{ answer.llm_ms|num }} ms de {{ "rédaction" if answer.generated else "LLM" }}{% if llm_name %} ({{ llm_name }}){% endif %}{% endif %}{% if answer.steps %} · {% for k, v in answer.steps.items() %}{{ k }} {{ v|num }} ms{{ ", " if not loop.last }}{% endfor %}{% endif %}.</p>{% endif %}
   {% if answer.identifiers %}<p class="hint ident-note">Limité aux documents qui contiennent {% for i in answer.identifiers %}« {{ i }} »{{ " et " if not loop.last }}{% endfor %} tel quel (texte ou données).</p>{% elif answer.identifiers_absent %}<p class="hint ident-note">Aucun document accessible ne contient {% for i in answer.identifiers_absent %}« {{ i }} »{{ " ni " if not loop.last }}{% endfor %} tel quel : résultats par ressemblance, à vérifier.</p>{% endif %}
   {% if answer.documents %}
   {% if answer.generated %}<h3 class="sources-title">Documents</h3>{% endif %}

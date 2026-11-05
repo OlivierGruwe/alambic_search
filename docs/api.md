@@ -105,6 +105,7 @@ curl -s https://search.client.fr/ask \
   "formulee": true,
   "duree_ms": 1840,
   "duree_llm_ms": 1620,
+  "etapes_ms": {"vecteur": 45, "recherche": 30, "reclassement": 120},
   "question_comprise": null,
   "identifiants": [],
   "identifiants_introuvables": [],
@@ -119,7 +120,7 @@ curl -s https://search.client.fr/ask \
 }
 ```
 
-`duree_ms` : temps total de la réponse ; `duree_llm_ms` : dont attente du LLM (rédaction, traduction d'une question de liste, question de suivi), 0 sans LLM.
+`duree_ms` : temps total de la réponse ; `duree_llm_ms` : dont attente du LLM (rédaction, traduction d'une question de liste, question de suivi), 0 sans LLM ; `etapes_ms` : durée de chaque étape de la recherche (vecteur de la question, recherche hybride, reclassement).
 
 Question de suivi : renvoyer l'échange précédent.
 

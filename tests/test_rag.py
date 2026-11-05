@@ -181,3 +181,11 @@ def test_reembed_updates_vectors_without_reading_files(connector, store, embedde
     n = reembed(store, rec, source="partage")
     assert n >= 4 and all(t.startswith("Document : ") for t in rec.seen)
     assert ask("pénalité de retard", frozenset({"compta"}), store, embedder, None, generate=False).hits
+
+
+def test_grouped_citations_are_split():
+    from ged.answer import split_cites
+
+    assert split_cites("Olivier [3, 4, 5] et Joseph [1].") == "Olivier [3], [4], [5] et Joseph [1]."
+    assert split_cites("Voir [2-4] ou [6 et 7] ; [8;9]") == "Voir [2], [3], [4] ou [6], [7] ; [8], [9]"
+    assert split_cites("Tableau [12] et [a, b]") == "Tableau [12] et [a, b]"
