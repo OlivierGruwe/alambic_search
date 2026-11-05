@@ -191,3 +191,14 @@ def test_llm_time_is_measured(indexed, store, embedder):
     answer = ask("Quel est le montant de la facture 001 ?", frozenset({"compta"}), store, embedder, llm)
     assert answer.generated and answer.llm_ms >= 0
     assert ask("Quel montant ?", frozenset({"compta"}), store, embedder, None, generate=False).llm_ms == 0
+
+
+def test_list_question_without_matching_data_falls_back_to_search(indexed, store, embedder):
+    """« Quels sont les documents sur la pénalité de retard ? » : aucune donnée extraite ne
+    contient la valeur, on fait la recherche ordinaire au lieu de rendre une liste vide."""
+    from ged.answer import ask
+
+    llm = RouterLLM('{"liste": true, "type": null, "champ": null, "valeur": "pénalité de retard"}', reply="Réponse [1]")
+    answer = ask("Quels sont les documents sur la pénalité de retard ?", frozenset({"compta"}), store, embedder, llm)
+    assert answer.criteria is None and answer.hits
+    assert any("contrat-fournisseur" in h.path for h in answer.hits)

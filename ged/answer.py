@@ -10,12 +10,15 @@ Question de liste (« toutes les factures de M. GRUWE ») : le LLM la traduit en
 exhaustive). Le LLM ne fait que comprendre la question : il ne choisit pas les documents."""
 from __future__ import annotations
 
+import logging
 import re
 
 from ged.embeddings import Embedder
 from ged.llm import LLM
 from ged.models import Answer, Citation, DocResult, Hit
 from ged.store import Store, normalize
+
+log = logging.getLogger("alambic_search.answer")
 
 SYSTEM_PROMPT = """Tu es l'assistant documentaire de l'entreprise.
 Règles :
@@ -232,7 +235,12 @@ def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, u
     if llm is not None:
         criteria = translate(question, store, llm)
         if criteria is not None:
-            return list_answer(question, groups, store, criteria)
+            listed = list_answer(question, groups, store, criteria)
+            # Aucune donnée extraite ne correspond (question thématique : « les documents sur la
+            # sécurité ») : ce n'était pas une liste par critères, recherche ordinaire.
+            if listed.criteria.documents:
+                return listed
+            log.info("Question de liste sans document par critères, recherche ordinaire : %r", question[:120])
 
     vector = embedder.embed([question])[0]
     # Identifiant dans la question (n° de permis, de facture…) : seuls les documents qui le
