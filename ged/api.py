@@ -304,11 +304,13 @@ def create_app(
         answer = ask(req.question, groups, store, embedder, llm, k=req.k, doc_types=frozenset(req.types) or None,
                      generate=req.formuler, url_for=document_url, per_document=req.par_document, reranker=reranker,
                      history=[e.model_dump() for e in req.historique])
-        store.log_question(groups, req.question, len(answer.hits), len(answer.citations),
-                           int((time.perf_counter() - t0) * 1000))
+        ms = int((time.perf_counter() - t0) * 1000)
+        store.log_question(groups, req.question, len(answer.hits), len(answer.citations), ms)
         return {
             "text": answer.text,
             "formulee": answer.generated,
+            "duree_ms": ms,  # temps total de la réponse
+            "duree_llm_ms": answer.llm_ms,  # dont attente du LLM (rédaction, critères, suivi)
             # question de suivi rendue autonome (null si la question se suffisait)
             "question_comprise": answer.reformulated,
             # identifiants de la question (n° de permis, de facture…) : seuls les documents qui les contiennent

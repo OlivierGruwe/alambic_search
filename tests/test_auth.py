@@ -86,6 +86,7 @@ def test_login_then_search_with_own_rights(http, store):
 
     html = http.post("/rechercher", data={"question": "pénalité de retard", "formuler": "true"}).text
     assert "Pénalité de 2 %" in html and "contrat-fournisseur.docx" in html  # compta, par l'AD rattaché
+    assert "Réponse en " in html  # temps affiché
     html = http.post("/rechercher", data={"question": "grille des salaires", "formuler": "false"}).text
     assert "salaires.txt" not in html  # RH : pas pour alice
 

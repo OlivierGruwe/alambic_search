@@ -17,6 +17,7 @@
     {% endfor %}
   </ul>
   {% else %}<p class="empty">Aucun document trouvé.</p>{% endif %}
+  {% if ms is defined %}<p class="hint timing">Réponse en {{ ms|num }} ms{% if answer and answer.llm_ms %}, dont {{ answer.llm_ms|num }} ms de LLM (compréhension de la question){% endif %}.</p>{% endif %}
 </section>
 {% if r.mentions %}
 <section class="section" aria-labelledby="ment-title">
@@ -71,6 +72,7 @@
     {% endfor %}
   </ol>
   {% endif %}
+  {% if ms is defined %}<p class="hint timing">Réponse en {{ ms|num }} ms{% if answer.llm_ms %}, dont {{ answer.llm_ms|num }} ms de {{ "rédaction" if answer.generated else "LLM" }}{% endif %}.</p>{% endif %}
   {% if historique and has_llm %}
   <div class="conv-actions">
     <span class="hint">Vous pouvez poser une question de suite (« et pour Durand ? », « quel montant ? »).</span>

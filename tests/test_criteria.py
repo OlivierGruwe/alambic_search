@@ -182,3 +182,12 @@ def test_list_answer_in_api_and_sandbox(indexed, store, embedder):
         "question": "Combien de factures pour Gruwe ?", "groups": "compta", "formuler": "true"}).text
     assert "Question comprise comme une liste par critères" in html and "facture-002.pdf" in html
     assert "facture-003.pdf" not in html
+
+
+def test_llm_time_is_measured(indexed, store, embedder):
+    from ged.answer import ask
+
+    llm = RouterLLM('{"liste": false}')
+    answer = ask("Quel est le montant de la facture 001 ?", frozenset({"compta"}), store, embedder, llm)
+    assert answer.generated and answer.llm_ms >= 0
+    assert ask("Quel montant ?", frozenset({"compta"}), store, embedder, None, generate=False).llm_ms == 0

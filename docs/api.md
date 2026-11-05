@@ -103,6 +103,8 @@ curl -s https://search.client.fr/ask \
 {
   "text": "La pénalité de retard est de 2 % par semaine [1].",
   "formulee": true,
+  "duree_ms": 1840,
+  "duree_llm_ms": 1620,
   "question_comprise": null,
   "identifiants": [],
   "identifiants_introuvables": [],
@@ -116,6 +118,8 @@ curl -s https://search.client.fr/ask \
   "liste": null
 }
 ```
+
+`duree_ms` : temps total de la réponse ; `duree_llm_ms` : dont attente du LLM (rédaction, traduction d'une question de liste, question de suivi), 0 sans LLM.
 
 Question de suivi : renvoyer l'échange précédent.
 

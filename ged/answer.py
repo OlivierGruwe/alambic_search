@@ -194,13 +194,35 @@ def ask(
     `reranker` : reclassement des passages (ged.rerank). `history` : échanges précédents
     [{question, reponse}] — la question de suivi est d'abord rendue autonome."""
     asked = question
+    llm = _Timed(llm) if llm is not None else None
     if history:
         question = standalone_question(question, history, llm)
     answer = _answer(question, groups, store, embedder, llm, k=k, generate=generate, doc_types=doc_types,
                      url_for=url_for, per_document=per_document, reranker=reranker)
     if question != asked:
         answer.reformulated = question
+    answer.llm_ms = int(llm.ms) if llm is not None else 0
     return answer
+
+
+class _Timed:
+    """LLM chronométré, le temps d'une question (propre à l'appel : pas d'état partagé)."""
+
+    def __init__(self, llm):
+        self.llm = llm
+        self.ms = 0.0
+
+    def complete(self, system: str, user: str) -> str:
+        import time
+
+        t0 = time.perf_counter()
+        try:
+            return self.llm.complete(system, user)
+        finally:
+            self.ms += (time.perf_counter() - t0) * 1000
+
+    def __getattr__(self, name):
+        return getattr(self.llm, name)
 
 
 def _answer(question, groups, store, embedder, llm, *, k, generate, doc_types, url_for, per_document,

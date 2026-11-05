@@ -126,6 +126,7 @@ class Answer:
     identifiers: tuple[str, ...] = ()  # identifiants de la question : seuls les documents qui les contiennent
     identifiers_absent: tuple[str, ...] = ()  # identifiants trouvés dans aucun document : résultats par ressemblance
     reformulated: str | None = None  # question de suivi rendue autonome (conversation)
+    llm_ms: int = 0  # temps passé à attendre le LLM (rédaction, traduction en critères, suivi)
 
 
 @dataclass(frozen=True)
